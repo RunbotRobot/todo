@@ -7,6 +7,7 @@ const FIREBASE_APP_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-ap
 const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 const INDENT = "    "; // 4 spaces per indent level
+const APP_VERSION = "1";
 
 /* ---------- config resolution ---------- */
 
@@ -38,7 +39,7 @@ let docRef = null;
 let fb = null; // holds { setDoc, onSnapshot, runTransaction } once the SDK loads
 let editingKey = null; // "listName:id" while a task is being edited inline
 let selected = null; // { listName, id } — the task the toolbar buttons act on
-let datePickerOpen = false; // whether the "send to Calendar" popover is open
+let pendingDatePicker = null; // "send-calendar" | "complete-recurring" | null
 let currentTab = "tasks";
 let suppressClickUntil = 0; // guards the ghost "click" that follows a real drag
 
@@ -48,6 +49,7 @@ const el = {
   configSave: document.getElementById("config-save"),
   configError: document.getElementById("config-error"),
   syncStatus: document.getElementById("sync-status"),
+  appVersion: document.getElementById("app-version"),
   tabs: document.getElementById("tabs"),
   toolbar: document.getElementById("toolbar"),
   tbAdd: document.getElementById("tb-add"),
@@ -94,6 +96,74 @@ function formatDate(ymd) {
 function formatTimestamp(iso) {
   const dt = new Date(iso);
   return dt.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+/* ---------- recurring tasks: [[Daily]], [[Weekly]], [[Tuesdays]], ... ---------- */
+
+const WEEKDAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+// Reads the first [[...]] marker in a task's text and returns either a
+// recurrence descriptor, "prompt" (for [[Recurring]], where the user picks
+// the next date themselves), or null (no marker, or one we don't recognize).
+function parseRecurrence(text) {
+  const match = text.match(/\[\[([^[\]]+)\]\]/);
+  if (!match) return null;
+  const raw = match[1].trim().toLowerCase();
+  if (raw === "recurring") return "prompt";
+  if (["daily", "weekly", "monthly", "yearly"].includes(raw)) return { type: raw };
+  if (raw === "start of month") return { type: "start-of-month" };
+  if (raw === "start of year") return { type: "start-of-year" };
+  const weekdayMatch = raw.match(/^(sunday|monday|tuesday|wednesday|thursday|friday|saturday)s$/);
+  if (weekdayMatch) return { type: "weekday", weekday: WEEKDAY_NAMES.indexOf(weekdayMatch[1]) };
+  return null;
+}
+
+// Adds calendar months to a date, clamping the day into the target month
+// (e.g. Jan 31 + 1 month -> Feb 28) instead of letting it roll into the
+// month after, which is what plain Date day-overflow would otherwise do.
+function addMonthsClamped(date, monthsToAdd) {
+  const targetIndex = date.getMonth() + monthsToAdd;
+  const targetYear = date.getFullYear() + Math.floor(targetIndex / 12);
+  const targetMonth = ((targetIndex % 12) + 12) % 12;
+  const daysInTargetMonth = new Date(targetYear, targetMonth + 1, 0).getDate();
+  return new Date(targetYear, targetMonth, Math.min(date.getDate(), daysInTargetMonth));
+}
+
+// fromYmd is the completion date ("today"); returns the next occurrence as
+// a YYYY-MM-DD string.
+function computeNextDate(recurrence, fromYmd) {
+  const [y, m, d] = fromYmd.split("-").map(Number);
+  const from = new Date(y, m - 1, d);
+  let next;
+  switch (recurrence.type) {
+    case "daily":
+      next = new Date(y, m - 1, d + 1);
+      break;
+    case "weekly":
+      next = new Date(y, m - 1, d + 7);
+      break;
+    case "monthly":
+      next = addMonthsClamped(from, 1);
+      break;
+    case "yearly":
+      next = addMonthsClamped(from, 12);
+      break;
+    case "start-of-month":
+      next = new Date(y, m, 1); // m is 1-indexed already, so this is next month's 1st
+      break;
+    case "start-of-year":
+      next = new Date(y + 1, 0, 1);
+      break;
+    case "weekday":
+      next = new Date(y, m - 1, d + 1);
+      while (next.getDay() !== recurrence.weekday) {
+        next = new Date(next.getFullYear(), next.getMonth(), next.getDate() + 1);
+      }
+      break;
+    default:
+      next = from;
+  }
+  return next.toLocaleDateString("en-CA");
 }
 
 /* ---------- persistence ---------- */
@@ -155,11 +225,22 @@ function findAndRemove(listName, id) {
   return list.splice(idx, 1)[0];
 }
 
-function completeTask(listName, id) {
+// nextDate (YYYY-MM-DD), when given, also spins off a fresh copy of the
+// task into Calendar for that date — used for recurring tasks.
+function completeTask(listName, id, nextDate) {
   const task = findAndRemove(listName, id);
   if (!task) return;
   const { targetDate, sentAt, ...rest } = task;
   state.completed.unshift({ ...rest, completedAt: new Date().toISOString() });
+  if (nextDate) {
+    state.calendar.push({
+      id: uuid(),
+      text: task.text,
+      createdAt: new Date().toISOString(),
+      targetDate: nextDate,
+      sentAt: new Date().toISOString(),
+    });
+  }
   render();
   saveState();
 }
@@ -335,7 +416,7 @@ function isSelected(listName, id) {
 
 function selectTask(listName, id) {
   selected = isSelected(listName, id) ? null : { listName, id };
-  datePickerOpen = false;
+  pendingDatePicker = null;
   render();
 }
 
@@ -420,10 +501,12 @@ function attachDragReorder(li, task) {
 
     const listEl = el.tasksList;
     const startY = e.clientY;
+    let lastY = e.clientY;
     const pointerId = e.pointerId;
     const isTouch = e.pointerType !== "mouse";
     let longPressTimer = null;
     let engaged = false;
+    let manualScrolling = false; // pre-engage swipe decided to be a scroll, not a drag
     let dropIndex = null;
     let siblingMidpoints = null;
 
@@ -436,6 +519,17 @@ function attachDragReorder(li, task) {
 
     function onMove(ev) {
       if (ev.pointerId !== pointerId) return;
+
+      if (manualScrolling) {
+        // Task rows have touch-action:none (see CSS) so the browser never
+        // starts its own scroll for a touch that began on one — we emulate
+        // it ourselves once a pre-engage swipe turns out to be a scroll,
+        // rather than a deliberate long-press-then-drag.
+        window.scrollBy(0, lastY - ev.clientY);
+        lastY = ev.clientY;
+        return;
+      }
+
       const dy = ev.clientY - startY;
       if (!engaged) {
         if (!isTouch && Math.abs(dy) > 4) {
@@ -443,7 +537,9 @@ function attachDragReorder(li, task) {
         } else if (isTouch && Math.abs(dy) > 10) {
           // Moved before the long-press fired — treat as a normal scroll.
           clearTimeout(longPressTimer);
-          cleanup();
+          manualScrolling = true;
+          window.scrollBy(0, lastY - ev.clientY);
+          lastY = ev.clientY;
           return;
         } else {
           return;
@@ -581,32 +677,58 @@ function buildDatePicker(onConfirm, onCancel) {
 
 function renderDatePickerPopover() {
   el.toolbar.querySelector(".date-picker")?.remove();
-  if (!datePickerOpen || !selected) return;
+  if (!pendingDatePicker || !selected) return;
   const { listName, id } = selected;
   if (!state[listName]?.some((t) => t.id === id)) {
-    datePickerOpen = false;
+    pendingDatePicker = null;
     return;
   }
-  el.toolbar.append(
-    buildDatePicker(
-      (date) => {
-        selected = null;
-        datePickerOpen = false;
-        moveToCalendar(id, date);
-      },
-      () => {
-        datePickerOpen = false;
-        render();
-      }
-    )
-  );
+
+  if (pendingDatePicker === "send-calendar") {
+    el.toolbar.append(
+      buildDatePicker(
+        (date) => {
+          selected = null;
+          pendingDatePicker = null;
+          moveToCalendar(id, date);
+        },
+        () => {
+          pendingDatePicker = null;
+          render();
+        }
+      )
+    );
+  } else if (pendingDatePicker === "complete-recurring") {
+    el.toolbar.append(
+      buildDatePicker(
+        (date) => {
+          selected = null;
+          pendingDatePicker = null;
+          completeTask(listName, id, date);
+        },
+        () => {
+          pendingDatePicker = null;
+          render();
+        }
+      )
+    );
+  }
 }
 
 el.tbComplete.addEventListener("click", () => {
   if (!selected) return;
   const { listName, id } = selected;
+  const task = state[listName]?.find((t) => t.id === id);
+  if (!task) return;
+  const recurrence = parseRecurrence(task.text);
+  if (recurrence === "prompt") {
+    pendingDatePicker = "complete-recurring";
+    render();
+    return;
+  }
   selected = null;
-  completeTask(listName, id);
+  const nextDate = recurrence ? computeNextDate(recurrence, todayLocal()) : null;
+  completeTask(listName, id, nextDate);
 });
 
 el.tbDelete.addEventListener("click", () => {
@@ -618,7 +740,7 @@ el.tbDelete.addEventListener("click", () => {
 
 el.tbSendCalendar.addEventListener("click", () => {
   if (!selected) return;
-  datePickerOpen = !datePickerOpen;
+  pendingDatePicker = pendingDatePicker === "send-calendar" ? null : "send-calendar";
   render();
 });
 
@@ -733,7 +855,7 @@ el.tabs.addEventListener("click", (e) => {
   document.getElementById(`${btn.dataset.tab}-panel`).classList.add("active");
   currentTab = btn.dataset.tab;
   selected = null;
-  datePickerOpen = false;
+  pendingDatePicker = null;
   render();
 });
 
@@ -827,6 +949,7 @@ async function connectFirebase(config) {
 }
 
 function boot() {
+  el.appVersion.textContent = `v${APP_VERSION}`;
   render(); // paint empty state immediately, independent of Firebase
   const config = resolveConfig();
   if (!config) {

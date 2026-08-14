@@ -6,6 +6,7 @@
   --muted: #888;
   --accent: #2f6f4f;
   --accent-bg: #eaf4ee;
+  --danger: #b3261e;
   --danger-bg: #fdecec;
   --radius: 8px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -38,11 +39,19 @@ body {
   font-size: 1.3rem;
   margin: 0;
 }
+.app-version {
+  font-size: 0.7rem;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
 .sync-status {
   font-size: 0.75rem;
   color: var(--muted);
 }
-.sync-status.error { color: #b3261e; }
+.sync-status.error { color: var(--danger); }
 
 .toolbar {
   display: flex;
@@ -137,6 +146,9 @@ textarea {
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none; /* no iOS "Copy/Share/..." popup on long-press */
 }
 
 .task-item.selectable {
@@ -206,7 +218,12 @@ textarea {
 
 #tasks-list .task-item {
   cursor: grab;
-  touch-action: manipulation;
+  /* Long-press-to-drag needs full control of the gesture from the start —
+     if the browser is allowed to recognize it as a scroll/pan first, it
+     wins the race well before our long-press timer fires, and takes the
+     touch away from us mid-drag. We emulate scrolling manually in JS for
+     swipes that turn out not to be a drag (see attachDragReorder). */
+  touch-action: none;
 }
 #tasks-list .task-item.dragging {
   cursor: grabbing;
@@ -240,9 +257,18 @@ textarea {
 .date-picker-input { width: 160px; }
 .date-picker button {
   border: none;
-  background: none;
   font-size: 1.1rem;
   cursor: pointer;
+  border-radius: 6px;
+  padding: 4px 6px;
+}
+.date-picker-confirm {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+.date-picker-cancel {
+  background: var(--danger-bg);
+  color: var(--danger);
 }
 
 .calendar-list {
@@ -310,7 +336,7 @@ textarea {
   color: var(--accent);
   cursor: pointer;
 }
-.config-error { color: #b3261e; font-size: 0.85rem; }
+.config-error { color: var(--danger); font-size: 0.85rem; }
 
 @media (max-width: 480px) {
   main { padding: 12px; }

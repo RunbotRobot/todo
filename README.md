@@ -3,10 +3,15 @@
 A simple, browser-based to-do list that syncs across devices. No accounts,
 no login, no build step — just static files plus a free Firebase database.
 
+A small version badge (`v1`, `v2`, ...) sits next to the title so you can
+tell whether the page you're looking at has picked up the latest deploy;
+it's bumped by hand in `app.js` (`APP_VERSION`) whenever something changes.
+
 ## Tabs
 
-- **Tasks** — your sorted list. New tasks go to the top. Use ▲/▼ to
-  reorder manually.
+- **Tasks** — your sorted list. New tasks go to the top. Drag a task
+  (click-drag on desktop, press-and-hold-then-drag on touch) to reorder;
+  a line shows where it'll land.
 - **Calendar** — tasks you're not ready to work on yet, grouped by the
   date you send them to. Once that date arrives, the app automatically
   moves them back to the top of Tasks.
@@ -15,13 +20,41 @@ no login, no build step — just static files plus a free Firebase database.
 
 Each task is plain text. You can use newlines and indentation for your
 own visual formatting:
-- **Tab** inserts an indent.
+- **Tab** inserts an indent. **Enter** adds the task / saves an edit;
+  **Alt+Enter** inserts a newline instead (desktop only — touch keyboards
+  don't have Alt, so Enter just inserts a newline there).
 - Typing **`>`** also inserts an indent (handy on a phone keyboard).
 - Typing **`\>`** gives you a literal `>` instead.
+- If a line is long enough to wrap, the wrapped part hangs one indent
+  level deeper than that line's own indent, so wrapped text doesn't run
+  back to the left margin.
 
-Buttons are icons, not words:
+There are no buttons on task rows — tap a task to select it (it
+highlights), then use the toolbar in the header to act on it: ➕ add ·
 ✅ complete · 🗑️ delete · ➡️ send to Calendar · ⬅️ send back to Tasks ·
-🧟 resurrect (restore) a deleted task.
+✏️ edit · 🧟 resurrect (restore) a deleted task. Only the buttons relevant
+to the current tab are shown, and they're disabled until something is
+selected.
+
+### Recurring tasks
+
+Put a marker anywhere in a task's text, in double square brackets, and
+completing it will also drop a fresh copy of it onto the Calendar for
+its next occurrence (the original still gets logged to Completed as
+usual):
+
+- `[[Daily]]` → next day · `[[Weekly]]` → +7 days
+- `[[Monthly]]` → same day next month (clamped if that day doesn't
+  exist, e.g. Jan 31 → Feb 28) · `[[Yearly]]` → same date next year
+- `[[Start of Month]]` → the 1st of next month ·
+  `[[Start of Year]]` → next Jan 1
+- `[[Tuesdays]]` (any weekday name + "s") → the next occurrence of that
+  weekday
+- `[[Recurring]]` → completing it prompts you to pick the next date
+  yourself
+
+The marker stays in the task's text, so the copy that lands on the
+Calendar keeps recurring the same way when you complete it again.
 
 ## One-time setup
 
