@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>To-Do</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>%E2%9C%85</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="config-banner" class="config-banner hidden">
+  <p>
+    This app isn't connected to a database yet, so nothing will save or sync across devices.
+    Paste your Firebase web config (JSON) below. See <code>README.md</code> for setup steps.
+  </p>
+  <textarea id="config-input" rows="6" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","storageBucket":"...","messagingSenderId":"...","appId":"..."}'></textarea>
+  <div class="config-actions">
+    <button id="config-save">Save & Connect</button>
+    <span id="config-error" class="config-error"></span>
+  </div>
+</div>
+
+<header class="app-header">
+  <h1>To-Do</h1>
+  <span id="sync-status" class="sync-status"></span>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button class="tab-btn active" data-tab="tasks">Tasks</button>
+  <button class="tab-btn" data-tab="calendar">Calendar</button>
+  <button class="tab-btn" data-tab="completed">Completed</button>
+  <button class="tab-btn" data-tab="deleted">Deleted</button>
+</nav>
+
+<main id="main">
+
+  <section id="tasks-panel" class="panel active">
+    <div class="add-task-bar">
+      <textarea id="new-task-input" rows="2" placeholder="New task... (Tab to indent, &gt; also indents, \&gt; for a literal &gt;)"></textarea>
+      <button id="add-task-btn" title="Add task">➕ Add</button>
+    </div>
+    <ul id="tasks-list" class="task-list"></ul>
+    <p id="tasks-empty" class="empty-msg hidden">No tasks. Add one above.</p>
+  </section>
+
+  <section id="calendar-panel" class="panel">
+    <div id="calendar-list" class="calendar-list"></div>
+    <p id="calendar-empty" class="empty-msg hidden">No tasks scheduled.</p>
+  </section>
+
+  <section id="completed-panel" class="panel">
+    <ul id="completed-list" class="task-list read-only"></ul>
+    <p id="completed-empty" class="empty-msg hidden">No completed tasks yet.</p>
+  </section>
+
+  <section id="deleted-panel" class="panel">
+    <ul id="deleted-list" class="task-list"></ul>
+    <p id="deleted-empty" class="empty-msg hidden">Nothing deleted.</p>
+  </section>
+
+</main>
+
+<template id="date-picker-template">
+  <div class="date-picker">
+    <input type="date" class="date-picker-input">
+    <button class="date-picker-confirm" title="Confirm date">✔️</button>
+    <button class="date-picker-cancel" title="Cancel">✖️</button>
+  </div>
+</template>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
