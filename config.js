@@ -13,10 +13,10 @@
 // JSON and it will be remembered on that device only (saved in localStorage).
 
 export const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyD26IEbCAUUDmmlwqIiD2nbrEDYp_4Zsgc",
+  authDomain: "todo-runbot.firebaseapp.com",
+  projectId: "todo-runbot",
+  storageBucket: "todo-runbot.firebasestorage.app",
+  messagingSenderId: "49667112290",
+  appId: "1:49667112290:web:a147131ae01c5cc7b2003b"
 };
