@@ -25,9 +25,25 @@
 </div>
 
 <header class="app-header">
-  <h1>To-Do</h1>
-  <span id="sync-status" class="sync-status"></span>
+  <div class="app-header-title">
+    <h1>To-Do</h1>
+    <span id="sync-status" class="sync-status"></span>
+  </div>
+  <div class="toolbar" id="toolbar">
+    <button id="tb-add" class="icon-btn" title="Add task">➕</button>
+    <button id="tb-complete" class="icon-btn" title="Complete" disabled>✅</button>
+    <button id="tb-delete" class="icon-btn" title="Delete" disabled>🗑️</button>
+    <button id="tb-send-calendar" class="icon-btn" title="Send to Calendar" disabled>➡️</button>
+    <button id="tb-send-tasks" class="icon-btn" title="Send back to Tasks" disabled>⬅️</button>
+    <button id="tb-edit" class="icon-btn" title="Edit" disabled>✏️</button>
+    <button id="tb-resurrect" class="icon-btn" title="Resurrect (restore)" disabled>🧟</button>
+  </div>
 </header>
+
+<div id="add-task-panel" class="add-task-panel hidden">
+  <textarea id="new-task-input" rows="2"></textarea>
+  <button id="confirm-add-btn" title="Add task">✔️</button>
+</div>
 
 <nav class="tabs" id="tabs">
   <button class="tab-btn active" data-tab="tasks">Tasks</button>
@@ -39,12 +55,8 @@
 <main id="main">
 
   <section id="tasks-panel" class="panel active">
-    <div class="add-task-bar">
-      <textarea id="new-task-input" rows="2"></textarea>
-      <button id="add-task-btn" title="Add task">➕ Add</button>
-    </div>
     <ul id="tasks-list" class="task-list"></ul>
-    <p id="tasks-empty" class="empty-msg hidden">No tasks. Add one above.</p>
+    <p id="tasks-empty" class="empty-msg hidden">No tasks. Tap ➕ above to add one.</p>
   </section>
 
   <section id="calendar-panel" class="panel">
@@ -53,7 +65,7 @@
   </section>
 
   <section id="completed-panel" class="panel">
-    <ul id="completed-list" class="task-list read-only"></ul>
+    <ul id="completed-list" class="task-list"></ul>
     <p id="completed-empty" class="empty-msg hidden">No completed tasks yet.</p>
   </section>
 

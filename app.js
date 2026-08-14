@@ -37,7 +37,9 @@ let db = null;
 let docRef = null;
 let fb = null; // holds { setDoc, onSnapshot, runTransaction } once the SDK loads
 let editingKey = null; // "listName:id" while a task is being edited inline
-let openDatePickerId = null;
+let selected = null; // { listName, id } — the task the toolbar buttons act on
+let datePickerOpen = false; // whether the "send to Calendar" popover is open
+let currentTab = "tasks";
 let suppressClickUntil = 0; // guards the ghost "click" that follows a real drag
 
 const el = {
@@ -47,8 +49,17 @@ const el = {
   configError: document.getElementById("config-error"),
   syncStatus: document.getElementById("sync-status"),
   tabs: document.getElementById("tabs"),
+  toolbar: document.getElementById("toolbar"),
+  tbAdd: document.getElementById("tb-add"),
+  tbComplete: document.getElementById("tb-complete"),
+  tbDelete: document.getElementById("tb-delete"),
+  tbSendCalendar: document.getElementById("tb-send-calendar"),
+  tbSendTasks: document.getElementById("tb-send-tasks"),
+  tbEdit: document.getElementById("tb-edit"),
+  tbResurrect: document.getElementById("tb-resurrect"),
+  addTaskPanel: document.getElementById("add-task-panel"),
   newTaskInput: document.getElementById("new-task-input"),
-  addTaskBtn: document.getElementById("add-task-btn"),
+  confirmAddBtn: document.getElementById("confirm-add-btn"),
   tasksList: document.getElementById("tasks-list"),
   tasksEmpty: document.getElementById("tasks-empty"),
   calendarList: document.getElementById("calendar-list"),
@@ -83,12 +94,6 @@ function formatDate(ymd) {
 function formatTimestamp(iso) {
   const dt = new Date(iso);
   return dt.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-}
-
-function escapeHtml(str) {
-  return str.replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
-  }[c]));
 }
 
 /* ---------- persistence ---------- */
@@ -285,6 +290,25 @@ function setCursor(el, pos) {
   el.selectionStart = el.selectionEnd = pos;
 }
 
+/* ---------- task text rendering (hanging indent) ---------- */
+
+// Each logical line (split on \n) becomes its own block so a line that
+// wraps onto a second visual row hangs one indent level deeper than the
+// line's own leading whitespace — this only needs a per-line text-indent/
+// padding trick, not per-character measurement.
+function renderTaskTextInto(container, text) {
+  container.innerHTML = "";
+  for (const line of text.split("\n")) {
+    const leading = line.match(/^ */)[0].length;
+    const lineEl = document.createElement("div");
+    lineEl.className = "task-line";
+    lineEl.style.paddingLeft = leading + INDENT.length + "ch";
+    lineEl.style.textIndent = -INDENT.length + "ch";
+    lineEl.textContent = line.slice(leading);
+    container.append(lineEl);
+  }
+}
+
 /* ---------- rendering ---------- */
 
 function render() {
@@ -292,6 +316,7 @@ function render() {
   renderCalendar();
   renderCompleted();
   renderDeleted();
+  updateToolbar();
 }
 
 function makeIconBtn(icon, title, onClick, extraClass = "") {
@@ -304,32 +329,71 @@ function makeIconBtn(icon, title, onClick, extraClass = "") {
   return btn;
 }
 
-function buildTaskTextNode(listName, task) {
-  const key = `${listName}:${task.id}`;
-  const wrap = document.createElement("div");
-  wrap.className = "task-text";
-  wrap.textContent = task.text;
-  wrap.title = "Click to edit";
-  wrap.addEventListener("click", () => {
+function isSelected(listName, id) {
+  return !!selected && selected.listName === listName && selected.id === id;
+}
+
+function selectTask(listName, id) {
+  selected = isSelected(listName, id) ? null : { listName, id };
+  datePickerOpen = false;
+  render();
+}
+
+// Builds a row for the Tasks, Calendar, and Deleted lists — the ones where
+// tapping a task selects it so the toolbar buttons can act on it. Completed
+// is a read-only log and builds its rows separately.
+function buildTaskRow(listName, task, metaText) {
+  const li = document.createElement("li");
+  li.className = "task-item selectable";
+  li.dataset.taskId = task.id;
+  if (isSelected(listName, task.id)) li.classList.add("selected");
+
+  const textWrap = document.createElement("div");
+  textWrap.className = "task-text";
+  renderTaskTextInto(textWrap, task.text);
+  li.append(textWrap);
+
+  if (metaText) {
+    const meta = document.createElement("div");
+    meta.className = "task-meta";
+    meta.textContent = metaText;
+    li.append(meta);
+  }
+
+  li.addEventListener("click", (e) => {
+    if (e.target.closest("button, textarea")) return; // e.g. Save/Cancel while editing
+    if (editingKey) return;
     if (Date.now() < suppressClickUntil) return; // ghost click right after a drag
-    startEdit(listName, task, wrap);
+    selectTask(listName, task.id);
   });
-  return wrap;
+
+  return li;
 }
 
 /* ---------- drag to reorder (Tasks tab only) ---------- */
 
-// Index is counted among the OTHER (non-dragged) tasks currently in the
-// DOM — i.e. where the dragged item would land if spliced into that list.
-function computeDropIndex(clientY, listEl, draggedLi) {
+// Midpoints of the OTHER (non-dragged) rows, captured once when the drag
+// engages — i.e. before the drop-line exists. Re-measuring live on every
+// move would be wrong: once the line is inserted it pushes later siblings
+// down, which would shift their midpoints and make the line "stick" short
+// of where the pointer actually is.
+function captureSiblingMidpoints(listEl, draggedLi) {
   const siblings = [...listEl.children].filter(
     (elm) => elm !== draggedLi && !elm.classList.contains("drop-line")
   );
-  for (let i = 0; i < siblings.length; i++) {
-    const rect = siblings[i].getBoundingClientRect();
-    if (clientY < rect.top + rect.height / 2) return i;
+  return siblings.map((elm) => {
+    const rect = elm.getBoundingClientRect();
+    return rect.top + rect.height / 2;
+  });
+}
+
+// Index is counted among the OTHER (non-dragged) tasks — i.e. where the
+// dragged item would land if spliced into that list.
+function dropIndexForY(midpoints, clientY) {
+  for (let i = 0; i < midpoints.length; i++) {
+    if (clientY < midpoints[i]) return i;
   }
-  return siblings.length;
+  return midpoints.length;
 }
 
 function positionDropLine(listEl, index, draggedLi) {
@@ -361,10 +425,12 @@ function attachDragReorder(li, task) {
     let longPressTimer = null;
     let engaged = false;
     let dropIndex = null;
+    let siblingMidpoints = null;
 
     function engage() {
       engaged = true;
       li.classList.add("dragging");
+      siblingMidpoints = captureSiblingMidpoints(listEl, li);
       try { li.setPointerCapture(pointerId); } catch { /* ignore */ }
     }
 
@@ -385,7 +451,7 @@ function attachDragReorder(li, task) {
       }
       ev.preventDefault();
       li.style.transform = `translateY(${dy}px)`;
-      dropIndex = computeDropIndex(ev.clientY, listEl, li);
+      dropIndex = dropIndexForY(siblingMidpoints, ev.clientY);
       positionDropLine(listEl, dropIndex, li);
     }
 
@@ -430,6 +496,8 @@ function attachDragReorder(li, task) {
   });
 }
 
+/* ---------- inline editing (triggered from the toolbar) ---------- */
+
 function startEdit(listName, task, textNode) {
   editingKey = `${listName}:${task.id}`;
   const container = textNode.parentElement;
@@ -464,7 +532,37 @@ function startEdit(listName, task, textNode) {
   textarea.focus();
 }
 
-function buildDatePicker(task, onConfirm) {
+/* ---------- toolbar ---------- */
+
+const TOOLBAR_ACTIONS_BY_TAB = {
+  tasks: ["complete", "delete", "send-calendar", "edit"],
+  calendar: ["complete", "delete", "send-tasks", "edit"],
+  completed: [],
+  deleted: ["resurrect"],
+};
+
+function toolbarActionButtons() {
+  return {
+    complete: el.tbComplete,
+    delete: el.tbDelete,
+    "send-calendar": el.tbSendCalendar,
+    "send-tasks": el.tbSendTasks,
+    edit: el.tbEdit,
+    resurrect: el.tbResurrect,
+  };
+}
+
+function updateToolbar() {
+  const allowed = new Set(TOOLBAR_ACTIONS_BY_TAB[currentTab] || []);
+  for (const [action, btn] of Object.entries(toolbarActionButtons())) {
+    const isRelevant = allowed.has(action);
+    btn.classList.toggle("hidden", !isRelevant);
+    btn.disabled = !isRelevant || !selected;
+  }
+  renderDatePickerPopover();
+}
+
+function buildDatePicker(onConfirm, onCancel) {
   const template = document.getElementById("date-picker-template");
   const node = template.content.firstElementChild.cloneNode(true);
   const input = node.querySelector(".date-picker-input");
@@ -475,15 +573,82 @@ function buildDatePicker(task, onConfirm) {
 
   node.querySelector(".date-picker-confirm").addEventListener("click", () => {
     if (!input.value) return;
-    openDatePickerId = null;
     onConfirm(input.value);
   });
-  node.querySelector(".date-picker-cancel").addEventListener("click", () => {
-    openDatePickerId = null;
-    render();
-  });
+  node.querySelector(".date-picker-cancel").addEventListener("click", onCancel);
   return node;
 }
+
+function renderDatePickerPopover() {
+  el.toolbar.querySelector(".date-picker")?.remove();
+  if (!datePickerOpen || !selected) return;
+  const { listName, id } = selected;
+  if (!state[listName]?.some((t) => t.id === id)) {
+    datePickerOpen = false;
+    return;
+  }
+  el.toolbar.append(
+    buildDatePicker(
+      (date) => {
+        selected = null;
+        datePickerOpen = false;
+        moveToCalendar(id, date);
+      },
+      () => {
+        datePickerOpen = false;
+        render();
+      }
+    )
+  );
+}
+
+el.tbComplete.addEventListener("click", () => {
+  if (!selected) return;
+  const { listName, id } = selected;
+  selected = null;
+  completeTask(listName, id);
+});
+
+el.tbDelete.addEventListener("click", () => {
+  if (!selected) return;
+  const { listName, id } = selected;
+  selected = null;
+  deleteTask(listName, id);
+});
+
+el.tbSendCalendar.addEventListener("click", () => {
+  if (!selected) return;
+  datePickerOpen = !datePickerOpen;
+  render();
+});
+
+el.tbSendTasks.addEventListener("click", () => {
+  if (!selected) return;
+  const { id } = selected;
+  selected = null;
+  moveToTasks(id);
+});
+
+el.tbEdit.addEventListener("click", () => {
+  if (!selected) return;
+  const { listName, id } = selected;
+  const task = state[listName]?.find((t) => t.id === id);
+  const row = document.querySelector(`.task-item[data-task-id="${id}"]`);
+  const textNode = row?.querySelector(".task-text");
+  if (!task || !textNode) return;
+  selected = null;
+  startEdit(listName, task, textNode);
+  updateToolbar();
+});
+
+el.tbResurrect.addEventListener("click", () => {
+  if (!selected) return;
+  const { id } = selected;
+  selected = null;
+  restoreFromDeleted(id);
+});
+
+/* ---------- list rendering ---------- */
 
 function renderTasks() {
   if (editingKey && editingKey.startsWith("tasks:")) return;
@@ -492,31 +657,7 @@ function renderTasks() {
   el.tasksEmpty.classList.toggle("hidden", state.tasks.length > 0);
 
   state.tasks.forEach((task) => {
-    const li = document.createElement("li");
-    li.className = "task-item";
-
-    const textNode = buildTaskTextNode("tasks", task);
-
-    const actionsCol = document.createElement("div");
-    actionsCol.className = "actions-col";
-    const actionsRow = document.createElement("div");
-    actionsRow.className = "actions-row";
-    actionsRow.append(
-      makeIconBtn("✅", "Complete", () => completeTask("tasks", task.id)),
-      makeIconBtn("🗑️", "Delete", () => deleteTask("tasks", task.id)),
-      makeIconBtn("➡️", "Send to Calendar", (e) => {
-        e.stopPropagation();
-        openDatePickerId = openDatePickerId === task.id ? null : task.id;
-        render();
-      })
-    );
-    actionsCol.append(actionsRow);
-
-    if (openDatePickerId === task.id) {
-      actionsCol.append(buildDatePicker(task, (date) => moveToCalendar(task.id, date)));
-    }
-
-    li.append(textNode, actionsCol);
+    const li = buildTaskRow("tasks", task);
     list.append(li);
     attachDragReorder(li, task);
   });
@@ -545,21 +686,7 @@ function renderCalendar() {
     const ul = document.createElement("ul");
     ul.className = "task-list";
     for (const task of groups[date]) {
-      const li = document.createElement("li");
-      li.className = "task-item";
-      const textNode = buildTaskTextNode("calendar", task);
-      const actionsCol = document.createElement("div");
-      actionsCol.className = "actions-col";
-      const actionsRow = document.createElement("div");
-      actionsRow.className = "actions-row";
-      actionsRow.append(
-        makeIconBtn("✅", "Complete", () => completeTask("calendar", task.id)),
-        makeIconBtn("🗑️", "Delete", () => deleteTask("calendar", task.id)),
-        makeIconBtn("⬅️", "Send back to Tasks", () => moveToTasks(task.id))
-      );
-      actionsCol.append(actionsRow);
-      li.append(textNode, actionsCol);
-      ul.append(li);
+      ul.append(buildTaskRow("calendar", task));
     }
     groupEl.append(ul);
     container.append(groupEl);
@@ -574,45 +701,25 @@ function renderCompleted() {
   state.completed.forEach((task) => {
     const li = document.createElement("li");
     li.className = "task-item";
-    const inner = document.createElement("div");
-    inner.style.flex = "1";
-    const textNode = document.createElement("div");
-    textNode.className = "task-text";
-    textNode.textContent = task.text;
+    const textWrap = document.createElement("div");
+    textWrap.className = "task-text";
+    renderTaskTextInto(textWrap, task.text);
     const meta = document.createElement("div");
     meta.className = "task-meta";
     meta.textContent = `Completed ${formatTimestamp(task.completedAt)}`;
-    inner.append(textNode, meta);
-    li.append(inner);
+    li.append(textWrap, meta);
     list.append(li);
   });
 }
 
 function renderDeleted() {
-  if (editingKey && editingKey.startsWith("deleted:")) return;
   const list = el.deletedList;
   list.innerHTML = "";
   el.deletedEmpty.classList.toggle("hidden", state.deleted.length > 0);
 
   state.deleted.forEach((task) => {
-    const li = document.createElement("li");
-    li.className = "task-item";
-    const inner = document.createElement("div");
-    inner.style.flex = "1";
-    const textNode = document.createElement("div");
-    textNode.className = "task-text";
-    textNode.textContent = task.text;
-    const meta = document.createElement("div");
-    meta.className = "task-meta";
-    meta.textContent = `Deleted ${formatTimestamp(task.deletedAt)} (from ${task.sourceList === "calendar" ? "Calendar" : "Tasks"})`;
-    inner.append(textNode, meta);
-
-    const actionsCol = document.createElement("div");
-    actionsCol.className = "actions-col";
-    actionsCol.append(makeIconBtn("🧟", "Resurrect (restore)", () => restoreFromDeleted(task.id)));
-
-    li.append(inner, actionsCol);
-    list.append(li);
+    const metaText = `Deleted ${formatTimestamp(task.deletedAt)} (from ${task.sourceList === "calendar" ? "Calendar" : "Tasks"})`;
+    list.append(buildTaskRow("deleted", task, metaText));
   });
 }
 
@@ -624,16 +731,32 @@ el.tabs.addEventListener("click", (e) => {
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
   document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
   document.getElementById(`${btn.dataset.tab}-panel`).classList.add("active");
+  currentTab = btn.dataset.tab;
+  selected = null;
+  datePickerOpen = false;
+  render();
 });
 
 /* ---------- add task ---------- */
 
-attachSmartTextarea(el.newTaskInput, { onSubmit: () => el.addTaskBtn.click() });
-el.addTaskBtn.addEventListener("click", () => {
+function submitNewTask() {
   addTask(el.newTaskInput.value);
   el.newTaskInput.value = "";
   autoResizeTextarea(el.newTaskInput);
-  el.newTaskInput.focus();
+  el.newTaskInput.blur(); // dismiss the on-screen keyboard on mobile
+  el.addTaskPanel.classList.add("hidden");
+}
+
+attachSmartTextarea(el.newTaskInput, { onSubmit: submitNewTask });
+el.confirmAddBtn.addEventListener("click", submitNewTask);
+
+el.tbAdd.addEventListener("click", () => {
+  const nowHidden = el.addTaskPanel.classList.toggle("hidden");
+  if (nowHidden) {
+    el.newTaskInput.blur();
+  } else {
+    el.newTaskInput.focus();
+  }
 });
 
 /* ---------- config banner ---------- */
