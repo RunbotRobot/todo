@@ -223,7 +223,12 @@ function editTaskText(listName, id, newText) {
 
 /* ---------- smart textarea: Tab and ">" indentation ---------- */
 
-function attachSmartTextarea(textarea) {
+// Touch devices have no Alt key and rely on the on-screen keyboard's return
+// key to insert newlines, so the Enter-submits/Alt+Enter-newlines swap below
+// only applies when the primary input is a physical keyboard.
+const IS_TOUCH_PRIMARY = window.matchMedia("(pointer: coarse)").matches;
+
+function attachSmartTextarea(textarea, { onSubmit } = {}) {
   let composing = false;
   textarea.addEventListener("compositionstart", () => (composing = true));
   textarea.addEventListener("compositionend", () => (composing = false));
@@ -232,6 +237,17 @@ function attachSmartTextarea(textarea) {
     if (e.key === "Tab") {
       e.preventDefault();
       insertAtCursor(textarea, INDENT);
+      return;
+    }
+    if (e.key === "Enter" && !composing && !IS_TOUCH_PRIMARY && onSubmit) {
+      e.preventDefault();
+      if (e.altKey) {
+        // Browsers generally don't insert a character while Alt is held
+        // (same as other Alt+key combos), so insert the newline ourselves.
+        insertAtCursor(textarea, "\n");
+      } else {
+        onSubmit();
+      }
     }
   });
 
@@ -296,19 +312,21 @@ function startEdit(listName, task, textNode) {
   const editWrap = document.createElement("div");
   editWrap.className = "task-edit-area";
 
+  const doSave = () => {
+    editingKey = null;
+    editTaskText(listName, task.id, textarea.value);
+  };
+
   const textarea = document.createElement("textarea");
   textarea.rows = Math.max(2, task.text.split("\n").length);
   textarea.value = task.text;
-  attachSmartTextarea(textarea);
+  attachSmartTextarea(textarea, { onSubmit: doSave });
 
   const actions = document.createElement("div");
   actions.className = "task-edit-actions";
   const saveBtn = document.createElement("button");
   saveBtn.textContent = "Save";
-  saveBtn.addEventListener("click", () => {
-    editingKey = null;
-    editTaskText(listName, task.id, textarea.value);
-  });
+  saveBtn.addEventListener("click", doSave);
   const cancelBtn = document.createElement("button");
   cancelBtn.textContent = "Cancel";
   cancelBtn.addEventListener("click", () => {
@@ -493,17 +511,11 @@ el.tabs.addEventListener("click", (e) => {
 
 /* ---------- add task ---------- */
 
-attachSmartTextarea(el.newTaskInput);
+attachSmartTextarea(el.newTaskInput, { onSubmit: () => el.addTaskBtn.click() });
 el.addTaskBtn.addEventListener("click", () => {
   addTask(el.newTaskInput.value);
   el.newTaskInput.value = "";
   el.newTaskInput.focus();
-});
-el.newTaskInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-    e.preventDefault();
-    el.addTaskBtn.click();
-  }
 });
 
 /* ---------- config banner ---------- */
