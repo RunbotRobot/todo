@@ -96,8 +96,13 @@ textarea, input[type="date"] {
   border-radius: var(--radius);
   background: var(--panel-bg);
   color: var(--text);
-  resize: vertical;
+  resize: none;
   width: 100%;
+}
+
+textarea {
+  min-height: 2.6em;
+  overflow: hidden; /* height tracks content via JS, no inner scrollbar needed */
 }
 
 .task-list {
@@ -154,12 +159,6 @@ textarea, input[type="date"] {
   cursor: pointer;
 }
 
-.reorder-col {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
 .icon-btn {
   border: none;
   background: none;
@@ -177,11 +176,23 @@ textarea, input[type="date"] {
 .icon-btn:hover, .icon-btn:active {
   background: var(--bg);
 }
-.icon-btn.small {
-  min-width: 28px;
-  min-height: 24px;
-  font-size: 0.8rem;
-  padding: 0;
+
+#tasks-list .task-item {
+  cursor: grab;
+  touch-action: manipulation;
+}
+#tasks-list .task-item.dragging {
+  cursor: grabbing;
+  opacity: 0.6;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+  position: relative;
+  z-index: 5;
+}
+#tasks-list .drop-line {
+  list-style: none;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--accent);
 }
 
 .actions-col {
@@ -287,5 +298,13 @@ textarea, input[type="date"] {
 
 @media (max-width: 480px) {
   main { padding: 12px; }
-  .task-item { flex-wrap: wrap; }
+  .task-item { flex-wrap: wrap; padding: 6px 8px; }
+  .task-list { gap: 4px; }
+  .task-text {
+    font-size: 8px;
+    line-height: 1.25;
+    padding: 2px;
+  }
+  .task-meta { font-size: 7px; }
+  textarea, input[type="date"] { font-size: 8px; }
 }

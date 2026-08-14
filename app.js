@@ -38,6 +38,7 @@ let docRef = null;
 let fb = null; // holds { setDoc, onSnapshot, runTransaction } once the SDK loads
 let editingKey = null; // "listName:id" while a task is being edited inline
 let openDatePickerId = null;
+let suppressClickUntil = 0; // guards the ghost "click" that follows a real drag
 
 const el = {
   configBanner: document.getElementById("config-banner"),
@@ -197,18 +198,14 @@ function restoreFromDeleted(id) {
   saveState();
 }
 
-function moveTaskUp(id) {
-  const idx = state.tasks.findIndex((t) => t.id === id);
-  if (idx <= 0) return;
-  [state.tasks[idx - 1], state.tasks[idx]] = [state.tasks[idx], state.tasks[idx - 1]];
-  render();
-  saveState();
-}
-
-function moveTaskDown(id) {
-  const idx = state.tasks.findIndex((t) => t.id === id);
-  if (idx === -1 || idx >= state.tasks.length - 1) return;
-  [state.tasks[idx + 1], state.tasks[idx]] = [state.tasks[idx], state.tasks[idx + 1]];
+// insertIndex is the target position counted among the OTHER tasks (i.e.
+// the list with the dragged task already removed) — see computeDropIndex.
+function moveTaskTo(id, insertIndex) {
+  const fromIndex = state.tasks.findIndex((t) => t.id === id);
+  if (fromIndex === -1 || fromIndex === insertIndex) return;
+  const [task] = state.tasks.splice(fromIndex, 1);
+  const clamped = Math.max(0, Math.min(insertIndex, state.tasks.length));
+  state.tasks.splice(clamped, 0, task);
   render();
   saveState();
 }
@@ -228,6 +225,11 @@ function editTaskText(listName, id, newText) {
 // only applies when the primary input is a physical keyboard.
 const IS_TOUCH_PRIMARY = window.matchMedia("(pointer: coarse)").matches;
 
+function autoResizeTextarea(textarea) {
+  textarea.style.height = "auto";
+  textarea.style.height = textarea.scrollHeight + "px";
+}
+
 function attachSmartTextarea(textarea, { onSubmit } = {}) {
   let composing = false;
   textarea.addEventListener("compositionstart", () => (composing = true));
@@ -237,6 +239,7 @@ function attachSmartTextarea(textarea, { onSubmit } = {}) {
     if (e.key === "Tab") {
       e.preventDefault();
       insertAtCursor(textarea, INDENT);
+      autoResizeTextarea(textarea);
       return;
     }
     if (e.key === "Enter" && !composing && !IS_TOUCH_PRIMARY && onSubmit) {
@@ -245,6 +248,7 @@ function attachSmartTextarea(textarea, { onSubmit } = {}) {
         // Browsers generally don't insert a character while Alt is held
         // (same as other Alt+key combos), so insert the newline ourselves.
         insertAtCursor(textarea, "\n");
+        autoResizeTextarea(textarea);
       } else {
         onSubmit();
       }
@@ -252,18 +256,22 @@ function attachSmartTextarea(textarea, { onSubmit } = {}) {
   });
 
   textarea.addEventListener("input", () => {
-    if (composing) return;
-    const pos = textarea.selectionStart;
-    if (pos > 0 && textarea.value[pos - 1] === ">") {
-      if (pos > 1 && textarea.value[pos - 2] === "\\") {
-        textarea.value = textarea.value.slice(0, pos - 2) + ">" + textarea.value.slice(pos);
-        setCursor(textarea, pos - 1);
-      } else {
-        textarea.value = textarea.value.slice(0, pos - 1) + INDENT + textarea.value.slice(pos);
-        setCursor(textarea, pos - 1 + INDENT.length);
+    if (!composing) {
+      const pos = textarea.selectionStart;
+      if (pos > 0 && textarea.value[pos - 1] === ">") {
+        if (pos > 1 && textarea.value[pos - 2] === "\\") {
+          textarea.value = textarea.value.slice(0, pos - 2) + ">" + textarea.value.slice(pos);
+          setCursor(textarea, pos - 1);
+        } else {
+          textarea.value = textarea.value.slice(0, pos - 1) + INDENT + textarea.value.slice(pos);
+          setCursor(textarea, pos - 1 + INDENT.length);
+        }
       }
     }
+    autoResizeTextarea(textarea);
   });
+
+  autoResizeTextarea(textarea);
 }
 
 function insertAtCursor(el, text) {
@@ -302,8 +310,124 @@ function buildTaskTextNode(listName, task) {
   wrap.className = "task-text";
   wrap.textContent = task.text;
   wrap.title = "Click to edit";
-  wrap.addEventListener("click", () => startEdit(listName, task, wrap));
+  wrap.addEventListener("click", () => {
+    if (Date.now() < suppressClickUntil) return; // ghost click right after a drag
+    startEdit(listName, task, wrap);
+  });
   return wrap;
+}
+
+/* ---------- drag to reorder (Tasks tab only) ---------- */
+
+// Index is counted among the OTHER (non-dragged) tasks currently in the
+// DOM — i.e. where the dragged item would land if spliced into that list.
+function computeDropIndex(clientY, listEl, draggedLi) {
+  const siblings = [...listEl.children].filter(
+    (elm) => elm !== draggedLi && !elm.classList.contains("drop-line")
+  );
+  for (let i = 0; i < siblings.length; i++) {
+    const rect = siblings[i].getBoundingClientRect();
+    if (clientY < rect.top + rect.height / 2) return i;
+  }
+  return siblings.length;
+}
+
+function positionDropLine(listEl, index, draggedLi) {
+  let line = listEl.querySelector(".drop-line");
+  if (!line) {
+    line = document.createElement("li");
+    line.className = "drop-line";
+    line.setAttribute("aria-hidden", "true");
+  }
+  const siblings = [...listEl.children].filter(
+    (elm) => elm !== draggedLi && elm !== line
+  );
+  listEl.insertBefore(line, siblings[index] || null);
+}
+
+function removeDropLine(listEl) {
+  listEl.querySelector(".drop-line")?.remove();
+}
+
+function attachDragReorder(li, task) {
+  li.addEventListener("pointerdown", (e) => {
+    if (e.target.closest("button, input, textarea")) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+
+    const listEl = el.tasksList;
+    const startY = e.clientY;
+    const pointerId = e.pointerId;
+    const isTouch = e.pointerType !== "mouse";
+    let longPressTimer = null;
+    let engaged = false;
+    let dropIndex = null;
+
+    function engage() {
+      engaged = true;
+      li.classList.add("dragging");
+      try { li.setPointerCapture(pointerId); } catch { /* ignore */ }
+    }
+
+    function onMove(ev) {
+      if (ev.pointerId !== pointerId) return;
+      const dy = ev.clientY - startY;
+      if (!engaged) {
+        if (!isTouch && Math.abs(dy) > 4) {
+          engage();
+        } else if (isTouch && Math.abs(dy) > 10) {
+          // Moved before the long-press fired — treat as a normal scroll.
+          clearTimeout(longPressTimer);
+          cleanup();
+          return;
+        } else {
+          return;
+        }
+      }
+      ev.preventDefault();
+      li.style.transform = `translateY(${dy}px)`;
+      dropIndex = computeDropIndex(ev.clientY, listEl, li);
+      positionDropLine(listEl, dropIndex, li);
+    }
+
+    function finish(shouldDrop) {
+      clearTimeout(longPressTimer);
+      if (engaged) {
+        try { li.releasePointerCapture(pointerId); } catch { /* ignore */ }
+        li.classList.remove("dragging");
+        li.style.transform = "";
+        removeDropLine(listEl);
+        if (shouldDrop && dropIndex !== null) {
+          moveTaskTo(task.id, dropIndex);
+        }
+        suppressClickUntil = Date.now() + 300;
+      }
+      cleanup();
+    }
+
+    function onUp(ev) {
+      if (ev.pointerId !== pointerId) return;
+      finish(true);
+    }
+
+    function onCancel(ev) {
+      if (ev.pointerId !== pointerId) return;
+      finish(false);
+    }
+
+    function cleanup() {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+    }
+
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+
+    if (isTouch) {
+      longPressTimer = setTimeout(engage, 400);
+    }
+  });
 }
 
 function startEdit(listName, task, textNode) {
@@ -367,17 +491,9 @@ function renderTasks() {
   list.innerHTML = "";
   el.tasksEmpty.classList.toggle("hidden", state.tasks.length > 0);
 
-  state.tasks.forEach((task, idx) => {
+  state.tasks.forEach((task) => {
     const li = document.createElement("li");
     li.className = "task-item";
-
-    const reorderCol = document.createElement("div");
-    reorderCol.className = "reorder-col";
-    const upBtn = makeIconBtn("▲", "Move up", () => moveTaskUp(task.id), "small");
-    const downBtn = makeIconBtn("▼", "Move down", () => moveTaskDown(task.id), "small");
-    if (idx === 0) upBtn.disabled = true;
-    if (idx === state.tasks.length - 1) downBtn.disabled = true;
-    reorderCol.append(upBtn, downBtn);
 
     const textNode = buildTaskTextNode("tasks", task);
 
@@ -400,8 +516,9 @@ function renderTasks() {
       actionsCol.append(buildDatePicker(task, (date) => moveToCalendar(task.id, date)));
     }
 
-    li.append(reorderCol, textNode, actionsCol);
+    li.append(textNode, actionsCol);
     list.append(li);
+    attachDragReorder(li, task);
   });
 }
 
@@ -515,6 +632,7 @@ attachSmartTextarea(el.newTaskInput, { onSubmit: () => el.addTaskBtn.click() });
 el.addTaskBtn.addEventListener("click", () => {
   addTask(el.newTaskInput.value);
   el.newTaskInput.value = "";
+  autoResizeTextarea(el.newTaskInput);
   el.newTaskInput.focus();
 });
 
