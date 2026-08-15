@@ -7,7 +7,7 @@ const FIREBASE_APP_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-ap
 const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "4";
+const APP_VERSION = "5";
 
 /* ---------- config resolution ---------- */
 
@@ -71,6 +71,13 @@ const el = {
   completedEmpty: document.getElementById("completed-empty"),
   deletedList: document.getElementById("deleted-list"),
   deletedEmpty: document.getElementById("deleted-empty"),
+  main: document.getElementById("main"),
+  tbSearch: document.getElementById("tb-search"),
+  searchPanel: document.getElementById("search-panel"),
+  searchInput: document.getElementById("search-input"),
+  searchCloseBtn: document.getElementById("search-close-btn"),
+  searchResults: document.getElementById("search-results"),
+  searchEmpty: document.getElementById("search-empty"),
 };
 
 /* ---------- utils ---------- */
@@ -422,6 +429,7 @@ function render() {
   renderCompleted();
   renderDeleted();
   updateToolbar();
+  if (!el.searchPanel.classList.contains("hidden")) renderSearchResults();
 }
 
 function makeIconBtn(icon, title, onClick, extraClass = "") {
@@ -888,6 +896,7 @@ function renderCompleted() {
   state.completed.forEach((task) => {
     const li = document.createElement("li");
     li.className = "task-item";
+    li.dataset.taskId = task.id;
     const textWrap = document.createElement("div");
     textWrap.className = "task-text";
     renderTaskTextInto(textWrap, task.text);
@@ -912,15 +921,19 @@ function renderDeleted() {
 
 /* ---------- tabs ---------- */
 
+function activateTab(tabName) {
+  document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === tabName));
+  document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
+  document.getElementById(`${tabName}-panel`).classList.add("active");
+  currentTab = tabName;
+  selected = null;
+  pendingDatePicker = null;
+}
+
 el.tabs.addEventListener("click", (e) => {
   const btn = e.target.closest(".tab-btn");
   if (!btn) return;
-  document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
-  document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
-  document.getElementById(`${btn.dataset.tab}-panel`).classList.add("active");
-  currentTab = btn.dataset.tab;
-  selected = null;
-  pendingDatePicker = null;
+  activateTab(btn.dataset.tab);
   render();
 });
 
@@ -947,9 +960,110 @@ el.tbAdd.addEventListener("click", () => {
   if (nowHidden) {
     el.newTaskInput.blur();
   } else {
+    closeSearchPanel();
     el.newTaskInput.focus();
   }
 });
+
+/* ---------- search ---------- */
+
+const SEARCH_LISTS = ["tasks", "calendar", "completed", "deleted"];
+
+function getSearchScope() {
+  return SEARCH_LISTS.filter((name) => document.getElementById(`search-scope-${name}`).checked);
+}
+
+function searchMetaFor(listName, task) {
+  switch (listName) {
+    case "tasks": return "Tasks";
+    case "calendar": return `Calendar · ${formatDate(task.targetDate)}`;
+    case "completed": return `Completed · ${formatTimestamp(task.completedAt)}`;
+    case "deleted": return `Deleted · ${formatTimestamp(task.deletedAt)}`;
+    default: return "";
+  }
+}
+
+function renderSearchResults() {
+  const query = el.searchInput.value.trim().toLowerCase();
+  const scope = getSearchScope();
+  const results = [];
+  for (const listName of scope) {
+    for (const task of state[listName]) {
+      if (!query || task.text.toLowerCase().includes(query)) {
+        results.push({ listName, task });
+      }
+    }
+  }
+
+  el.searchResults.innerHTML = "";
+  el.searchEmpty.classList.toggle("hidden", results.length > 0);
+  for (const { listName, task } of results) {
+    const li = document.createElement("li");
+    li.className = "task-item selectable";
+    const textWrap = document.createElement("div");
+    textWrap.className = "task-text";
+    renderTaskTextInto(textWrap, task.text);
+    const meta = document.createElement("div");
+    meta.className = "task-meta";
+    meta.textContent = searchMetaFor(listName, task);
+    li.append(textWrap, meta);
+    li.addEventListener("click", () => jumpToTask(listName, task.id));
+    el.searchResults.append(li);
+  }
+}
+
+// Closes search, switches to the task's tab, selects it (so the toolbar can
+// act on it right away — Completed has no selection concept, so it's just
+// scrolled to), and briefly flashes the row so it's easy to spot.
+function jumpToTask(listName, id) {
+  closeSearchPanel();
+  activateTab(listName);
+  if (listName !== "completed") selected = { listName, id };
+  render();
+
+  requestAnimationFrame(() => {
+    const row = document.querySelector(`.task-item[data-task-id="${id}"]`);
+    if (!row) return;
+    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    row.classList.add("jump-flash");
+    row.addEventListener("animationend", () => row.classList.remove("jump-flash"), { once: true });
+  });
+}
+
+function openSearchPanel() {
+  el.addTaskPanel.classList.add("hidden");
+  for (const name of SEARCH_LISTS) {
+    document.getElementById(`search-scope-${name}`).checked = name === currentTab;
+  }
+  el.searchInput.value = "";
+  el.tabs.classList.add("hidden");
+  el.main.classList.add("hidden");
+  el.searchPanel.classList.remove("hidden");
+  renderSearchResults();
+  el.searchInput.focus();
+}
+
+function closeSearchPanel() {
+  el.searchPanel.classList.add("hidden");
+  el.tabs.classList.remove("hidden");
+  el.main.classList.remove("hidden");
+}
+
+el.tbSearch.addEventListener("click", () => {
+  if (el.searchPanel.classList.contains("hidden")) {
+    openSearchPanel();
+  } else {
+    closeSearchPanel();
+  }
+});
+el.searchCloseBtn.addEventListener("click", closeSearchPanel);
+el.searchInput.addEventListener("input", renderSearchResults);
+el.searchInput.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeSearchPanel();
+});
+for (const name of SEARCH_LISTS) {
+  document.getElementById(`search-scope-${name}`).addEventListener("change", renderSearchResults);
+}
 
 /* ---------- config banner ---------- */
 

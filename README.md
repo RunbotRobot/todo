@@ -31,11 +31,20 @@ own visual formatting:
   back to the left margin.
 
 There are no buttons on task rows — tap a task to select it (it
-highlights), then use the toolbar in the header to act on it: ➕ add ·
-✅ complete · 🗑️ delete · ➡️ send to Calendar · ⬅️ send back to Tasks ·
-✏️ edit · 🧟 resurrect (restore) a deleted task. Only the buttons relevant
-to the current tab are shown, and they're disabled until something is
-selected.
+highlights), then use the toolbar in the header to act on it: 🔍 search ·
+➕ add · ✅ complete · 🗑️ delete · ➡️ send to Calendar · ⬅️ send back to
+Tasks · ✏️ edit · 🧟 resurrect (restore) a deleted task. Only the buttons
+relevant to the current tab are shown, and they're disabled until
+something is selected.
+
+### Search
+
+🔍 opens a search box that defaults to searching just the tab you were
+on; check or uncheck the Tasks/Calendar/Completed/Deleted boxes to widen
+or narrow it. Results show which tab they came from. Tapping a result
+closes search, jumps to that tab, scrolls to the task, and flashes it —
+for Tasks/Calendar/Deleted it also selects the task, so the toolbar is
+immediately ready to act on it.
 
 ### Recurring tasks
 
