@@ -7,7 +7,7 @@ const FIREBASE_APP_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-ap
 const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "6";
+const APP_VERSION = "7";
 
 /* ---------- config resolution ---------- */
 
@@ -63,6 +63,7 @@ const el = {
   newTaskInput: document.getElementById("new-task-input"),
   confirmAddBtn: document.getElementById("confirm-add-btn"),
   cancelAddBtn: document.getElementById("cancel-add-btn"),
+  addTaskError: document.getElementById("add-task-error"),
   tasksList: document.getElementById("tasks-list"),
   tasksEmpty: document.getElementById("tasks-empty"),
   calendarList: document.getElementById("calendar-list"),
@@ -129,6 +130,17 @@ function parseRecurrence(text) {
     if (n > 0) return { type: "every-n-days", n };
   }
   return null;
+}
+
+// Distinguishes "no [[...]] marker at all" (fine, not recurring) from
+// "there's one but we don't recognize it" (a likely typo) — parseRecurrence
+// alone returns null for both, which isn't enough to validate on save.
+// Returns the raw bracket contents (for the error message) or null if the
+// text is fine either way.
+function findUnrecognizedRecurrenceMarker(text) {
+  const match = text.match(/\[\[([^[\]]+)\]\]/);
+  if (!match) return null;
+  return parseRecurrence(text) === null ? match[1].trim() : null;
 }
 
 // Adds calendar months to a date, clamping the day into the target month
@@ -655,7 +667,16 @@ function startEdit(listName, task, textNode) {
   const editWrap = document.createElement("div");
   editWrap.className = "task-edit-area";
 
+  const errorMsg = document.createElement("p");
+  errorMsg.className = "field-error hidden";
+
   const doSave = () => {
+    const badMarker = findUnrecognizedRecurrenceMarker(textarea.value);
+    if (badMarker) {
+      errorMsg.textContent = `"[[${badMarker}]]" isn't a recognized recurrence — fix or remove it to save.`;
+      errorMsg.classList.remove("hidden");
+      return;
+    }
     editingKey = null;
     editTaskText(listName, task.id, textarea.value);
   };
@@ -664,6 +685,7 @@ function startEdit(listName, task, textNode) {
   textarea.rows = 1; // just a pre-JS fallback — attachSmartTextarea auto-fits the real height
   textarea.value = task.text;
   attachSmartTextarea(textarea, { onSubmit: doSave });
+  textarea.addEventListener("input", () => errorMsg.classList.add("hidden"));
 
   const actions = document.createElement("div");
   actions.className = "task-edit-actions";
@@ -677,7 +699,7 @@ function startEdit(listName, task, textNode) {
     render();
   });
   actions.append(saveBtn, cancelBtn);
-  editWrap.append(textarea, actions);
+  editWrap.append(textarea, errorMsg, actions);
 
   container.replaceChild(editWrap, textNode);
   // Re-measure now that the textarea is actually laid out in the live DOM —
@@ -944,14 +966,22 @@ function closeAddPanel() {
   autoResizeTextarea(el.newTaskInput);
   el.newTaskInput.blur(); // dismiss the on-screen keyboard on mobile
   el.addTaskPanel.classList.add("hidden");
+  el.addTaskError.classList.add("hidden");
 }
 
 function submitNewTask() {
+  const badMarker = findUnrecognizedRecurrenceMarker(el.newTaskInput.value);
+  if (badMarker) {
+    el.addTaskError.textContent = `"[[${badMarker}]]" isn't a recognized recurrence — fix or remove it to add.`;
+    el.addTaskError.classList.remove("hidden");
+    return;
+  }
   addTask(el.newTaskInput.value);
   closeAddPanel();
 }
 
 attachSmartTextarea(el.newTaskInput, { onSubmit: submitNewTask });
+el.newTaskInput.addEventListener("input", () => el.addTaskError.classList.add("hidden"));
 el.confirmAddBtn.addEventListener("click", submitNewTask);
 el.cancelAddBtn.addEventListener("click", closeAddPanel);
 

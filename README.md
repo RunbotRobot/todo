@@ -68,6 +68,12 @@ usual):
 - `[[Recurring]]` → completing it prompts you to pick the next date
   yourself
 
+If the text inside `[[...]]` doesn't match one of these (a typo like
+`[[Evety 2 days]]`), Save is blocked and an error explains why — a task
+can't be left in a state where its recurrence marker is silently
+ignored. Cancel always works regardless, since it discards the edit
+rather than saving it.
+
 The marker stays in the task's text, so the copy that lands on the
 Calendar keeps recurring the same way when you complete it again.
 

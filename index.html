@@ -20,7 +20,7 @@
   <textarea id="config-input" rows="6" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","storageBucket":"...","messagingSenderId":"...","appId":"..."}'></textarea>
   <div class="config-actions">
     <button id="config-save">Save & Connect</button>
-    <span id="config-error" class="config-error"></span>
+    <span id="config-error" class="field-error"></span>
   </div>
 </div>
 
@@ -44,9 +44,12 @@
   </header>
 
   <div id="add-task-panel" class="add-task-panel hidden">
-    <textarea id="new-task-input" rows="1"></textarea>
-    <button id="confirm-add-btn" title="Add task">✔️</button>
-    <button id="cancel-add-btn" title="Cancel">❌</button>
+    <div class="add-task-row">
+      <textarea id="new-task-input" rows="1"></textarea>
+      <button id="confirm-add-btn" title="Add task">✔️</button>
+      <button id="cancel-add-btn" title="Cancel">❌</button>
+    </div>
+    <p id="add-task-error" class="field-error hidden"></p>
   </div>
 
   <div id="search-panel" class="search-panel hidden">

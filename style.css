@@ -110,10 +110,12 @@ main {
 .panel.active { display: block; }
 
 .add-task-panel {
+  padding: 10px 16px;
+}
+.add-task-row {
   display: flex;
   gap: 8px;
   align-items: flex-start;
-  padding: 10px 16px;
 }
 .add-task-panel textarea {
   flex: 1;
@@ -254,6 +256,11 @@ textarea {
 
 .task-edit-area {
   flex: 1;
+}
+.field-error {
+  color: var(--danger);
+  font-size: 0.85rem;
+  margin: 6px 0 0;
 }
 .task-edit-actions {
   display: flex;
@@ -416,7 +423,9 @@ textarea {
   color: var(--accent);
   cursor: pointer;
 }
-.config-error { color: var(--danger); font-size: 0.85rem; }
+.config-actions .field-error {
+  margin: 0; /* sits inline next to the button here, not stacked below a field */
+}
 
 @media (max-width: 480px) {
   main { padding: 12px; }
