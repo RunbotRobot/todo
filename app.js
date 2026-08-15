@@ -7,7 +7,7 @@ const FIREBASE_APP_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-ap
 const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "3";
+const APP_VERSION = "4";
 
 /* ---------- config resolution ---------- */
 
@@ -116,6 +116,11 @@ function parseRecurrence(text) {
   if (raw === "start of year") return { type: "start-of-year" };
   const weekdayMatch = raw.match(/^(sunday|monday|tuesday|wednesday|thursday|friday|saturday)s$/);
   if (weekdayMatch) return { type: "weekday", weekday: WEEKDAY_NAMES.indexOf(weekdayMatch[1]) };
+  const everyNMatch = raw.match(/^every (\d+) days?$/);
+  if (everyNMatch) {
+    const n = parseInt(everyNMatch[1], 10);
+    if (n > 0) return { type: "every-n-days", n };
+  }
   return null;
 }
 
@@ -142,6 +147,9 @@ function computeNextDate(recurrence, fromYmd) {
       break;
     case "weekly":
       next = new Date(y, m - 1, d + 7);
+      break;
+    case "every-n-days":
+      next = new Date(y, m - 1, d + recurrence.n);
       break;
     case "monthly":
       next = addMonthsClamped(from, 1);
@@ -250,6 +258,14 @@ function deleteTask(listName, id) {
   const task = findAndRemove(listName, id);
   if (!task) return;
   state.deleted.unshift({ ...task, deletedAt: new Date().toISOString(), sourceList: listName });
+  render();
+  saveState();
+}
+
+// Deleting a task that's already in Deleted removes it for good, rather
+// than looping it back into Deleted with a new timestamp.
+function permanentlyDeleteTask(id) {
+  if (!findAndRemove("deleted", id)) return;
   render();
   saveState();
 }
@@ -386,7 +402,14 @@ function renderTaskTextInto(container, text) {
     lineEl.className = "task-line";
     lineEl.style.paddingLeft = leading + INDENT.length + "ch";
     lineEl.style.textIndent = -INDENT.length + "ch";
-    lineEl.textContent = line.slice(leading);
+    const rest = line.slice(leading);
+    if (rest === "") {
+      // A completely empty div collapses to zero height in most browsers —
+      // this is what was silently swallowing blank lines between \n\n.
+      lineEl.appendChild(document.createElement("br"));
+    } else {
+      lineEl.textContent = rest;
+    }
     container.append(lineEl);
   }
 }
@@ -662,7 +685,7 @@ const TOOLBAR_ACTIONS_BY_TAB = {
   tasks: ["complete", "delete", "send-calendar", "edit"],
   calendar: ["complete", "delete", "send-tasks", "edit"],
   completed: [],
-  deleted: ["resurrect"],
+  deleted: ["resurrect", "delete"],
 };
 
 function toolbarActionButtons() {
@@ -683,6 +706,9 @@ function updateToolbar() {
     btn.classList.toggle("hidden", !isRelevant);
     btn.disabled = !isRelevant || !selected;
   }
+  const deleteLabel = currentTab === "deleted" ? "Delete Permanently" : "Delete";
+  el.tbDelete.title = deleteLabel;
+  el.tbDelete.setAttribute("aria-label", deleteLabel);
   renderDatePickerPopover();
 }
 
@@ -770,7 +796,11 @@ el.tbDelete.addEventListener("click", () => {
   if (!selected) return;
   const { listName, id } = selected;
   selected = null;
-  deleteTask(listName, id);
+  if (listName === "deleted") {
+    permanentlyDeleteTask(id);
+  } else {
+    deleteTask(listName, id);
+  }
 });
 
 el.tbSendCalendar.addEventListener("click", () => {

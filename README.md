@@ -16,7 +16,8 @@ it's bumped by hand in `app.js` (`APP_VERSION`) whenever something changes.
   date you send them to. Once that date arrives, the app automatically
   moves them back to the top of Tasks.
 - **Completed** — a log of finished tasks with a completion timestamp.
-- **Deleted** — anything you trashed, in case you change your mind.
+- **Deleted** — anything you trashed, in case you change your mind. 🧟
+  restores it; 🗑️ here deletes it for good, with no way back.
 
 Each task is plain text. You can use newlines and indentation for your
 own visual formatting:
@@ -43,7 +44,8 @@ completing it will also drop a fresh copy of it onto the Calendar for
 its next occurrence (the original still gets logged to Completed as
 usual):
 
-- `[[Daily]]` → next day · `[[Weekly]]` → +7 days
+- `[[Daily]]` → next day · `[[Weekly]]` → +7 days ·
+  `[[Every 3 days]]` (any number) → +n days
 - `[[Monthly]]` → same day next month (clamped if that day doesn't
   exist, e.g. Jan 31 → Feb 28) · `[[Yearly]]` → same date next year
 - `[[Start of Month]]` → the 1st of next month ·
