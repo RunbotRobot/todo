@@ -101,16 +101,24 @@ main {
 }
 .add-task-panel textarea {
   flex: 1;
+  min-height: 2.6em; /* looks substantial even empty; editing an existing task doesn't need this */
 }
-#confirm-add-btn {
+#confirm-add-btn, #cancel-add-btn {
   padding: 10px 14px;
   border-radius: var(--radius);
-  border: 1px solid var(--accent);
-  background: var(--accent-bg);
-  color: var(--accent);
   font-size: 1rem;
   cursor: pointer;
   white-space: nowrap;
+}
+#confirm-add-btn {
+  border: 1px solid var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+#cancel-add-btn {
+  border: 1px solid var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
 }
 
 textarea, input[type="date"] {
@@ -124,9 +132,12 @@ textarea, input[type="date"] {
   resize: none;
   width: 100%;
 }
+textarea:focus, input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 
 textarea {
-  min-height: 2.6em;
   overflow: hidden; /* height tracks content via JS, no inner scrollbar needed */
 }
 

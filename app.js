@@ -7,7 +7,7 @@ const FIREBASE_APP_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-ap
 const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "2";
+const APP_VERSION = "3";
 
 /* ---------- config resolution ---------- */
 
@@ -62,6 +62,7 @@ const el = {
   addTaskPanel: document.getElementById("add-task-panel"),
   newTaskInput: document.getElementById("new-task-input"),
   confirmAddBtn: document.getElementById("confirm-add-btn"),
+  cancelAddBtn: document.getElementById("cancel-add-btn"),
   tasksList: document.getElementById("tasks-list"),
   tasksEmpty: document.getElementById("tasks-empty"),
   calendarList: document.getElementById("calendar-list"),
@@ -629,7 +630,7 @@ function startEdit(listName, task, textNode) {
   };
 
   const textarea = document.createElement("textarea");
-  textarea.rows = Math.max(2, task.text.split("\n").length);
+  textarea.rows = 1; // just a pre-JS fallback — attachSmartTextarea auto-fits the real height
   textarea.value = task.text;
   attachSmartTextarea(textarea, { onSubmit: doSave });
 
@@ -648,6 +649,10 @@ function startEdit(listName, task, textNode) {
   editWrap.append(textarea, actions);
 
   container.replaceChild(editWrap, textNode);
+  // Re-measure now that the textarea is actually laid out in the live DOM —
+  // scrollHeight on a still-detached element (as it was inside
+  // attachSmartTextarea above) isn't reliable.
+  autoResizeTextarea(textarea);
   textarea.focus();
 }
 
@@ -690,6 +695,13 @@ function buildDatePicker(onConfirm, onCancel) {
   input.value = tomorrow.toLocaleDateString("en-CA");
   input.min = todayLocal();
 
+  // Picking a date submits immediately — no separate confirm click needed.
+  // The checkmark stays as a fallback for accepting the pre-filled default
+  // without touching the field (some browsers don't fire "change" unless
+  // the value actually changes).
+  input.addEventListener("change", () => {
+    if (input.value) onConfirm(input.value);
+  });
   node.querySelector(".date-picker-confirm").addEventListener("click", () => {
     if (!input.value) return;
     onConfirm(input.value);
@@ -884,16 +896,21 @@ el.tabs.addEventListener("click", (e) => {
 
 /* ---------- add task ---------- */
 
-function submitNewTask() {
-  addTask(el.newTaskInput.value);
+function closeAddPanel() {
   el.newTaskInput.value = "";
   autoResizeTextarea(el.newTaskInput);
   el.newTaskInput.blur(); // dismiss the on-screen keyboard on mobile
   el.addTaskPanel.classList.add("hidden");
 }
 
+function submitNewTask() {
+  addTask(el.newTaskInput.value);
+  closeAddPanel();
+}
+
 attachSmartTextarea(el.newTaskInput, { onSubmit: submitNewTask });
 el.confirmAddBtn.addEventListener("click", submitNewTask);
+el.cancelAddBtn.addEventListener("click", closeAddPanel);
 
 el.tbAdd.addEventListener("click", () => {
   const nowHidden = el.addTaskPanel.classList.toggle("hidden");
