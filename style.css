@@ -6,6 +6,8 @@
   --muted: #888;
   --accent: #2f6f4f;
   --accent-bg: #eaf4ee;
+  --selected: #3468c0;
+  --selected-bg: #e7eefb;
   --danger: #b3261e;
   --danger-bg: #fdecec;
   --radius: 8px;
@@ -231,8 +233,8 @@ textarea {
   cursor: pointer;
 }
 .task-item.selected {
-  border-color: var(--accent);
-  background: var(--accent-bg);
+  border-color: var(--selected);
+  background: var(--selected-bg);
 }
 
 .task-text {
@@ -387,7 +389,7 @@ textarea {
 }
 .calendar-group .task-item:first-child { border-top: none; }
 .calendar-group .task-item.selected {
-  border-top-color: var(--accent);
+  border-top-color: var(--selected);
 }
 
 .empty-msg {
