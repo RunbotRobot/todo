@@ -7,7 +7,7 @@ const FIREBASE_APP_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-ap
 const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "5";
+const APP_VERSION = "6";
 
 /* ---------- config resolution ---------- */
 
@@ -1119,7 +1119,7 @@ async function connectFirebase(config) {
       } else {
         state = { tasks: [], calendar: [], completed: [], deleted: [] };
       }
-      setSyncStatus("Synced");
+      setSyncStatus(""); // nothing to say when everything's fine
       render();
       promoteDueTasksIfNeeded();
     },

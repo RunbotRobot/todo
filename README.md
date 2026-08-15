@@ -7,6 +7,10 @@ A small version badge (`v1`, `v2`, ...) sits next to the title so you can
 tell whether the page you're looking at has picked up the latest deploy;
 it's bumped by hand in `app.js` (`APP_VERSION`) whenever something changes.
 
+The title, toolbar, and tabs stay pinned to the top as you scroll. The
+text next to the title is normally blank — it only says something when
+sync isn't in its normal state (connecting, offline, an error).
+
 ## Tabs
 
 - **Tasks** — your sorted list. New tasks go to the top. Drag a task

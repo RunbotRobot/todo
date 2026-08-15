@@ -21,23 +21,33 @@ body {
   min-height: 100vh;
 }
 
+.app-top {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--bg);
+}
+
 .app-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
-  row-gap: 6px;
-  column-gap: 12px;
-  padding: 12px 16px 0;
+  flex-wrap: nowrap;
+  gap: 10px;
+  padding: 10px 16px;
 }
 .app-header-title {
   display: flex;
   align-items: baseline;
   gap: 8px;
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
 }
 .app-header h1 {
   font-size: 1.3rem;
   margin: 0;
+  flex-shrink: 0;
 }
 .app-version {
   font-size: 0.7rem;
@@ -46,17 +56,23 @@ body {
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 1px 6px;
+  flex-shrink: 0;
 }
 .sync-status {
   font-size: 0.75rem;
   color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sync-status.error { color: var(--danger); }
 
 .toolbar {
   display: flex;
   gap: 2px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+  overflow-x: auto;
   justify-content: flex-end;
   position: relative;
 }
@@ -64,7 +80,7 @@ body {
 .tabs {
   display: flex;
   gap: 4px;
-  padding: 12px 16px 0;
+  padding: 6px 16px 0;
   border-bottom: 1px solid var(--border);
   overflow-x: auto;
 }

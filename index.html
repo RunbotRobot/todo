@@ -24,51 +24,53 @@
   </div>
 </div>
 
-<header class="app-header">
-  <div class="app-header-title">
-    <h1>To-Do</h1>
-    <span id="app-version" class="app-version"></span>
-    <span id="sync-status" class="sync-status"></span>
-  </div>
-  <div class="toolbar" id="toolbar">
-    <button id="tb-search" class="icon-btn" title="Search">🔍</button>
-    <button id="tb-add" class="icon-btn" title="Add task">➕</button>
-    <button id="tb-complete" class="icon-btn" title="Complete" disabled>✅</button>
-    <button id="tb-delete" class="icon-btn" title="Delete" disabled>🗑️</button>
-    <button id="tb-send-calendar" class="icon-btn" title="Send to Calendar" disabled>➡️</button>
-    <button id="tb-send-tasks" class="icon-btn" title="Send back to Tasks" disabled>⬅️</button>
-    <button id="tb-edit" class="icon-btn" title="Edit" disabled>✏️</button>
-    <button id="tb-resurrect" class="icon-btn" title="Resurrect (restore)" disabled>🧟</button>
-  </div>
-</header>
+<div id="app-top" class="app-top">
+  <header class="app-header">
+    <div class="app-header-title">
+      <h1>To-Do</h1>
+      <span id="app-version" class="app-version"></span>
+      <span id="sync-status" class="sync-status"></span>
+    </div>
+    <div class="toolbar" id="toolbar">
+      <button id="tb-search" class="icon-btn" title="Search">🔍</button>
+      <button id="tb-add" class="icon-btn" title="Add task">➕</button>
+      <button id="tb-complete" class="icon-btn" title="Complete" disabled>✅</button>
+      <button id="tb-delete" class="icon-btn" title="Delete" disabled>🗑️</button>
+      <button id="tb-send-calendar" class="icon-btn" title="Send to Calendar" disabled>➡️</button>
+      <button id="tb-send-tasks" class="icon-btn" title="Send back to Tasks" disabled>⬅️</button>
+      <button id="tb-edit" class="icon-btn" title="Edit" disabled>✏️</button>
+      <button id="tb-resurrect" class="icon-btn" title="Resurrect (restore)" disabled>🧟</button>
+    </div>
+  </header>
 
-<div id="add-task-panel" class="add-task-panel hidden">
-  <textarea id="new-task-input" rows="1"></textarea>
-  <button id="confirm-add-btn" title="Add task">✔️</button>
-  <button id="cancel-add-btn" title="Cancel">❌</button>
+  <div id="add-task-panel" class="add-task-panel hidden">
+    <textarea id="new-task-input" rows="1"></textarea>
+    <button id="confirm-add-btn" title="Add task">✔️</button>
+    <button id="cancel-add-btn" title="Cancel">❌</button>
+  </div>
+
+  <div id="search-panel" class="search-panel hidden">
+    <div class="search-panel-header">
+      <input type="text" id="search-input" placeholder="Search…">
+      <button id="search-close-btn" title="Close search">❌</button>
+    </div>
+    <div class="search-scope">
+      <label><input type="checkbox" id="search-scope-tasks"> Tasks</label>
+      <label><input type="checkbox" id="search-scope-calendar"> Calendar</label>
+      <label><input type="checkbox" id="search-scope-completed"> Completed</label>
+      <label><input type="checkbox" id="search-scope-deleted"> Deleted</label>
+    </div>
+    <ul id="search-results" class="task-list"></ul>
+    <p id="search-empty" class="empty-msg hidden">No matches.</p>
+  </div>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab-btn active" data-tab="tasks">Tasks</button>
+    <button class="tab-btn" data-tab="calendar">Calendar</button>
+    <button class="tab-btn" data-tab="completed">Completed</button>
+    <button class="tab-btn" data-tab="deleted">Deleted</button>
+  </nav>
 </div>
-
-<div id="search-panel" class="search-panel hidden">
-  <div class="search-panel-header">
-    <input type="text" id="search-input" placeholder="Search…">
-    <button id="search-close-btn" title="Close search">❌</button>
-  </div>
-  <div class="search-scope">
-    <label><input type="checkbox" id="search-scope-tasks"> Tasks</label>
-    <label><input type="checkbox" id="search-scope-calendar"> Calendar</label>
-    <label><input type="checkbox" id="search-scope-completed"> Completed</label>
-    <label><input type="checkbox" id="search-scope-deleted"> Deleted</label>
-  </div>
-  <ul id="search-results" class="task-list"></ul>
-  <p id="search-empty" class="empty-msg hidden">No matches.</p>
-</div>
-
-<nav class="tabs" id="tabs">
-  <button class="tab-btn active" data-tab="tasks">Tasks</button>
-  <button class="tab-btn" data-tab="calendar">Calendar</button>
-  <button class="tab-btn" data-tab="completed">Completed</button>
-  <button class="tab-btn" data-tab="deleted">Deleted</button>
-</nav>
 
 <main id="main">
 
