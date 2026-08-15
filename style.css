@@ -216,6 +216,9 @@ textarea {
   cursor: default;
 }
 
+#tasks-list {
+  position: relative; /* anchors the absolutely-positioned .drop-line */
+}
 #tasks-list .task-item {
   cursor: grab;
   /* Long-press-to-drag needs full control of the gesture from the start —
@@ -227,16 +230,19 @@ textarea {
 }
 #tasks-list .task-item.dragging {
   cursor: grabbing;
-  opacity: 0.6;
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
-  position: relative;
-  z-index: 5;
+  background: #fff6c9; /* pale yellow */
+  border-color: #e8d478;
 }
 #tasks-list .drop-line {
   list-style: none;
+  position: absolute;
+  left: 0;
+  right: 0;
   height: 3px;
   border-radius: 2px;
   background: var(--accent);
+  transform: translateY(-50%);
+  pointer-events: none;
 }
 
 .date-picker {

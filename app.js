@@ -7,7 +7,7 @@ const FIREBASE_APP_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-ap
 const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "1";
+const APP_VERSION = "2";
 
 /* ---------- config resolution ---------- */
 
@@ -477,17 +477,40 @@ function dropIndexForY(midpoints, clientY) {
   return midpoints.length;
 }
 
-function positionDropLine(listEl, index, draggedLi) {
+// One Y position per possible drop index (there are siblings.length + 1 of
+// them — before the first, between each pair, after the last), relative to
+// listEl's own top. Captured once at engage, same as the midpoints above,
+// and for the same reason: nothing should move mid-drag, dragged item
+// included, so these positions stay valid for the whole gesture.
+function captureGapPositions(listEl, draggedLi) {
+  const siblings = [...listEl.children].filter(
+    (elm) => elm !== draggedLi && !elm.classList.contains("drop-line")
+  );
+  const listTop = listEl.getBoundingClientRect().top;
+  const rects = siblings.map((elm) => elm.getBoundingClientRect());
+  const gaps = [];
+  for (let i = 0; i <= rects.length; i++) {
+    let y;
+    if (rects.length === 0) y = listTop;
+    else if (i === 0) y = rects[0].top;
+    else if (i === rects.length) y = rects[rects.length - 1].bottom;
+    else y = (rects[i - 1].bottom + rects[i].top) / 2;
+    gaps.push(y - listTop);
+  }
+  return gaps;
+}
+
+// The line is an absolutely-positioned overlay (see CSS), not a real flex
+// item — moving it never reflows the tasks around it.
+function showDropLine(listEl, topPx) {
   let line = listEl.querySelector(".drop-line");
   if (!line) {
     line = document.createElement("li");
     line.className = "drop-line";
     line.setAttribute("aria-hidden", "true");
+    listEl.append(line);
   }
-  const siblings = [...listEl.children].filter(
-    (elm) => elm !== draggedLi && elm !== line
-  );
-  listEl.insertBefore(line, siblings[index] || null);
+  line.style.top = `${topPx}px`;
 }
 
 function removeDropLine(listEl) {
@@ -509,11 +532,13 @@ function attachDragReorder(li, task) {
     let manualScrolling = false; // pre-engage swipe decided to be a scroll, not a drag
     let dropIndex = null;
     let siblingMidpoints = null;
+    let gapPositions = null;
 
     function engage() {
       engaged = true;
       li.classList.add("dragging");
       siblingMidpoints = captureSiblingMidpoints(listEl, li);
+      gapPositions = captureGapPositions(listEl, li);
       try { li.setPointerCapture(pointerId); } catch { /* ignore */ }
     }
 
@@ -546,9 +571,8 @@ function attachDragReorder(li, task) {
         }
       }
       ev.preventDefault();
-      li.style.transform = `translateY(${dy}px)`;
       dropIndex = dropIndexForY(siblingMidpoints, ev.clientY);
-      positionDropLine(listEl, dropIndex, li);
+      showDropLine(listEl, gapPositions[dropIndex]);
     }
 
     function finish(shouldDrop) {
@@ -556,7 +580,6 @@ function attachDragReorder(li, task) {
       if (engaged) {
         try { li.releasePointerCapture(pointerId); } catch { /* ignore */ }
         li.classList.remove("dragging");
-        li.style.transform = "";
         removeDropLine(listEl);
         if (shouldDrop && dropIndex !== null) {
           moveTaskTo(task.id, dropIndex);
