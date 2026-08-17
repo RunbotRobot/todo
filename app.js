@@ -7,7 +7,7 @@ const FIREBASE_APP_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-ap
 const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "8";
+const APP_VERSION = "9";
 
 /* ---------- config resolution ---------- */
 
@@ -51,7 +51,7 @@ const el = {
   syncStatus: document.getElementById("sync-status"),
   appVersion: document.getElementById("app-version"),
   tabs: document.getElementById("tabs"),
-  toolbar: document.getElementById("toolbar"),
+  appHeader: document.querySelector(".app-header"),
   tbAdd: document.getElementById("tb-add"),
   tbComplete: document.getElementById("tb-complete"),
   tbDelete: document.getElementById("tb-delete"),
@@ -767,7 +767,7 @@ function buildDatePicker(onConfirm, onCancel) {
 }
 
 function renderDatePickerPopover() {
-  el.toolbar.querySelector(".date-picker")?.remove();
+  el.appHeader.querySelector(".date-picker")?.remove();
   if (!pendingDatePicker || !selected) return;
   const { listName, id } = selected;
   if (!state[listName]?.some((t) => t.id === id)) {
@@ -776,7 +776,7 @@ function renderDatePickerPopover() {
   }
 
   if (pendingDatePicker === "send-calendar") {
-    el.toolbar.append(
+    el.appHeader.append(
       buildDatePicker(
         (date) => {
           selected = null;
@@ -790,7 +790,7 @@ function renderDatePickerPopover() {
       )
     );
   } else if (pendingDatePicker === "complete-recurring") {
-    el.toolbar.append(
+    el.appHeader.append(
       buildDatePicker(
         (date) => {
           selected = null;

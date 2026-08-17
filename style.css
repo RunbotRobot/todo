@@ -37,6 +37,7 @@ body {
   flex-wrap: nowrap;
   gap: 10px;
   padding: 10px 16px;
+  position: relative; /* anchors .date-picker — .toolbar can't, its overflow-x:auto would clip it */
 }
 .app-header-title {
   display: flex;
