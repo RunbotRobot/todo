@@ -19,9 +19,11 @@ sync isn't in its normal state (connecting, offline, an error).
 - **Calendar** — tasks you're not ready to work on yet, grouped by the
   date you send them to. Once that date arrives, the app automatically
   moves them back to the top of Tasks.
-- **Completed** — a log of finished tasks with a completion timestamp.
+- **Completed** — a log of finished tasks with a completion timestamp. 🧟
+  sends one back to the top of Tasks.
 - **Deleted** — anything you trashed, in case you change your mind. 🧟
-  restores it; 🗑️ here deletes it for good, with no way back.
+  restores it (back to Tasks, or Calendar on its original date); 🗑️ here
+  deletes it for good, with no way back.
 
 Each task is plain text. You can use newlines and indentation for your
 own visual formatting:
@@ -37,9 +39,9 @@ own visual formatting:
 There are no buttons on task rows — tap a task to select it (it
 highlights), then use the toolbar in the header to act on it: 🔍 search ·
 ➕ add · ✅ complete · 🗑️ delete · ➡️ send to Calendar · ⬅️ send back to
-Tasks · ✏️ edit · 🧟 resurrect (restore) a deleted task. Only the buttons
-relevant to the current tab are shown, and they're disabled until
-something is selected.
+Tasks · ✏️ edit · 🧟 resurrect a completed or deleted task back to Tasks.
+Only the buttons relevant to the current tab are shown, and they're
+disabled until something is selected.
 
 ### Search
 

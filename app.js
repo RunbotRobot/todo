@@ -7,7 +7,7 @@ const FIREBASE_APP_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-ap
 const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "9";
+const APP_VERSION = "10";
 
 /* ---------- config resolution ---------- */
 
@@ -316,6 +316,17 @@ function restoreFromDeleted(id) {
     const { targetDate, sentAt, ...clean } = rest;
     state.tasks.unshift(clean);
   }
+  render();
+  saveState();
+}
+
+// Unlike restoreFromDeleted, this always goes to the top of Tasks — a
+// completed task doesn't carry a Calendar date to return to.
+function resurrectCompletedTask(id) {
+  const task = findAndRemove("completed", id);
+  if (!task) return;
+  const { completedAt, ...rest } = task;
+  state.tasks.unshift(rest);
   render();
   saveState();
 }
@@ -714,7 +725,7 @@ function startEdit(listName, task, textNode) {
 const TOOLBAR_ACTIONS_BY_TAB = {
   tasks: ["complete", "delete", "send-calendar", "edit"],
   calendar: ["complete", "delete", "send-tasks", "edit"],
-  completed: [],
+  completed: ["resurrect"],
   deleted: ["resurrect", "delete"],
 };
 
@@ -860,9 +871,13 @@ el.tbEdit.addEventListener("click", () => {
 
 el.tbResurrect.addEventListener("click", () => {
   if (!selected) return;
-  const { id } = selected;
+  const { listName, id } = selected;
   selected = null;
-  restoreFromDeleted(id);
+  if (listName === "completed") {
+    resurrectCompletedTask(id);
+  } else {
+    restoreFromDeleted(id);
+  }
 });
 
 /* ---------- list rendering ---------- */
@@ -916,17 +931,8 @@ function renderCompleted() {
   el.completedEmpty.classList.toggle("hidden", state.completed.length > 0);
 
   state.completed.forEach((task) => {
-    const li = document.createElement("li");
-    li.className = "task-item";
-    li.dataset.taskId = task.id;
-    const textWrap = document.createElement("div");
-    textWrap.className = "task-text";
-    renderTaskTextInto(textWrap, task.text);
-    const meta = document.createElement("div");
-    meta.className = "task-meta";
-    meta.textContent = `Completed ${formatTimestamp(task.completedAt)}`;
-    li.append(textWrap, meta);
-    list.append(li);
+    const metaText = `Completed ${formatTimestamp(task.completedAt)}`;
+    list.append(buildTaskRow("completed", task, metaText));
   });
 }
 
@@ -1042,13 +1048,12 @@ function renderSearchResults() {
   }
 }
 
-// Closes search, switches to the task's tab, selects it (so the toolbar can
-// act on it right away — Completed has no selection concept, so it's just
-// scrolled to), and briefly flashes the row so it's easy to spot.
+// Closes search, switches to the task's tab, selects it so the toolbar can
+// act on it right away, and briefly flashes the row so it's easy to spot.
 function jumpToTask(listName, id) {
   closeSearchPanel();
   activateTab(listName);
-  if (listName !== "completed") selected = { listName, id };
+  selected = { listName, id };
   render();
 
   requestAnimationFrame(() => {
