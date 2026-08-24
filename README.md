@@ -39,9 +39,20 @@ own visual formatting:
 There are no buttons on task rows — tap a task to select it (it
 highlights), then use the toolbar in the header to act on it: 🔍 search ·
 ➕ add · ✅ complete · 🗑️ delete · ➡️ send to Calendar · ⬅️ send back to
-Tasks · ✏️ edit · 🧟 resurrect a completed or deleted task back to Tasks.
-Only the buttons relevant to the current tab are shown, and they're
-disabled until something is selected.
+Tasks · ⏸️ pause (see below) · ✏️ edit · 🧟 resurrect a completed or
+deleted task back to Tasks. Only the buttons relevant to the current tab
+are shown, and they're disabled until something is selected.
+
+### Pausing a blocked task
+
+Select a task in Tasks and tap ⏸️ to say what it's waiting on (e.g.
+"Home"). That creates a pale-red folder right there in the Tasks list —
+tap the folder (it turns a darker red) to open it and see what's
+paused inside, or ▶️ any task in it to send it back to the top of
+Tasks. Pausing a second task with the same blocker (typed again, or by
+tapping the folder's pill in the pause prompt instead of typing) adds
+it to that same folder rather than making a new one. A folder with
+nothing left in it disappears on its own.
 
 ### Search
 

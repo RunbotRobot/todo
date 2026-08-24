@@ -10,6 +10,10 @@
   --selected-bg: #e7eefb;
   --danger: #b3261e;
   --danger-bg: #fdecec;
+  --folder-bg: #fbe1e1;
+  --folder-border: #e3a3a3;
+  --folder-bg-selected: #f0b8b8;
+  --folder-border-selected: #c76b6b;
   --radius: 8px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
@@ -238,6 +242,34 @@ textarea {
   background: var(--selected-bg);
 }
 
+.task-item.folder {
+  background: var(--folder-bg);
+  border-color: var(--folder-border);
+}
+.task-item.folder.selected {
+  background: var(--folder-bg-selected);
+  border-color: var(--folder-border-selected);
+}
+.folder-label {
+  font-weight: 600;
+}
+.folder-contents {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--folder-border);
+  gap: 6px;
+}
+.folder-child {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  background: var(--panel-bg);
+}
+.folder-child .task-text {
+  flex: 1;
+  min-width: 0;
+}
+
 .task-text {
   min-width: 0;
 }
@@ -317,6 +349,13 @@ textarea {
   background: #fff6c9; /* pale yellow */
   border-color: #e8d478;
 }
+#tasks-list .task-item.folder {
+  /* Folders aren't draggable, so undo the grab cursor/gesture-claiming
+     above — matching specificity (id + 2 classes) is needed to win over
+     the rule above, not just the .task-item.folder rule on its own. */
+  cursor: pointer;
+  touch-action: manipulation;
+}
 #tasks-list .drop-line {
   list-style: none;
   position: absolute;
@@ -359,6 +398,59 @@ textarea {
 .date-picker-cancel {
   background: var(--danger-bg);
   color: var(--danger);
+}
+
+.pause-picker {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 5;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+  width: max-content;
+  max-width: min(320px, 90vw);
+}
+.pause-picker-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.pause-picker-input { width: 180px; }
+.pause-picker-row button {
+  border: none;
+  font-size: 1.1rem;
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 4px 6px;
+}
+.pause-picker-confirm {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+.pause-picker-cancel {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.pause-picker-folders {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.pause-picker-folders:empty {
+  margin-top: 0;
+}
+.pause-folder-pill {
+  border: 1px solid var(--folder-border);
+  background: var(--folder-bg);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.85rem;
+  cursor: pointer;
 }
 
 .calendar-list {

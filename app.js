@@ -7,7 +7,7 @@ const FIREBASE_APP_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-ap
 const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "10";
+const APP_VERSION = "11";
 
 /* ---------- config resolution ---------- */
 
@@ -39,7 +39,7 @@ let docRef = null;
 let fb = null; // holds { setDoc, onSnapshot, runTransaction } once the SDK loads
 let editingKey = null; // "listName:id" while a task is being edited inline
 let selected = null; // { listName, id } — the task the toolbar buttons act on
-let pendingDatePicker = null; // "send-calendar" | "complete-recurring" | null
+let pendingPopover = null; // "send-calendar" | "complete-recurring" | "pause" | null
 let currentTab = "tasks";
 let suppressClickUntil = 0; // guards the ghost "click" that follows a real drag
 
@@ -56,6 +56,7 @@ const el = {
   tbComplete: document.getElementById("tb-complete"),
   tbDelete: document.getElementById("tb-delete"),
   tbSendCalendar: document.getElementById("tb-send-calendar"),
+  tbPause: document.getElementById("tb-pause"),
   tbSendTasks: document.getElementById("tb-send-tasks"),
   tbEdit: document.getElementById("tb-edit"),
   tbResurrect: document.getElementById("tb-resurrect"),
@@ -331,6 +332,51 @@ function resurrectCompletedTask(id) {
   saveState();
 }
 
+// Folders are just another kind of entry in state.tasks — { type: "folder",
+// blocker, tasks: [...] } — so they sit inline with regular tasks, sync the
+// same way, and don't need a whole new top-level list. Pausing removes the
+// task from Tasks and either joins an existing folder for that blocker
+// (case-insensitive match) or creates a new one.
+function pauseTask(id, blockerName) {
+  const trimmed = blockerName.trim();
+  if (!trimmed) return;
+  const task = findAndRemove("tasks", id);
+  if (!task) return;
+  const existing = state.tasks.find(
+    (t) => t.type === "folder" && t.blocker.toLowerCase() === trimmed.toLowerCase()
+  );
+  if (existing) {
+    existing.tasks.unshift(task);
+  } else {
+    state.tasks.unshift({
+      id: uuid(),
+      type: "folder",
+      blocker: trimmed,
+      createdAt: new Date().toISOString(),
+      tasks: [task],
+    });
+  }
+  render();
+  saveState();
+}
+
+// Moves a task back out of its folder to the top of Tasks. Removes the
+// folder itself once it's empty.
+function resumeTask(folderId, taskId) {
+  const folder = state.tasks.find((t) => t.id === folderId && t.type === "folder");
+  if (!folder) return;
+  const idx = folder.tasks.findIndex((t) => t.id === taskId);
+  if (idx === -1) return;
+  const [task] = folder.tasks.splice(idx, 1);
+  state.tasks.unshift(task);
+  if (folder.tasks.length === 0) {
+    findAndRemove("tasks", folderId);
+    if (selected && selected.id === folderId) selected = null;
+  }
+  render();
+  saveState();
+}
+
 // insertIndex is the target position counted among the OTHER tasks (i.e.
 // the list with the dragged task already removed) — see computeDropIndex.
 function moveTaskTo(id, insertIndex) {
@@ -471,7 +517,7 @@ function isSelected(listName, id) {
 
 function selectTask(listName, id) {
   selected = isSelected(listName, id) ? null : { listName, id };
-  pendingDatePicker = null;
+  pendingPopover = null;
   render();
 }
 
@@ -502,6 +548,49 @@ function buildTaskRow(listName, task, metaText) {
     if (Date.now() < suppressClickUntil) return; // ghost click right after a drag
     selectTask(listName, task.id);
   });
+
+  return li;
+}
+
+// A folder is "open" exactly when it's selected — no separate expanded-state
+// tracking needed, and it collapses for free whenever selection moves
+// elsewhere. Its own toolbar actions are all disabled (see updateToolbar);
+// the only thing you can do with its contents is resume one back to Tasks.
+function buildFolderRow(folder) {
+  const isOpen = isSelected("tasks", folder.id);
+  const li = document.createElement("li");
+  li.className = "task-item folder selectable";
+  li.dataset.taskId = folder.id;
+  if (isOpen) li.classList.add("selected");
+
+  const textWrap = document.createElement("div");
+  textWrap.className = "task-text";
+  const label = document.createElement("div");
+  label.className = "task-line folder-label";
+  label.textContent = `🗂️ ${folder.blocker} (${folder.tasks.length})`;
+  textWrap.append(label);
+  li.append(textWrap);
+
+  li.addEventListener("click", (e) => {
+    if (e.target.closest("button")) return;
+    if (Date.now() < suppressClickUntil) return;
+    selectTask("tasks", folder.id);
+  });
+
+  if (isOpen) {
+    const sub = document.createElement("ul");
+    sub.className = "task-list folder-contents";
+    for (const child of folder.tasks) {
+      const childLi = document.createElement("li");
+      childLi.className = "task-item folder-child";
+      const childText = document.createElement("div");
+      childText.className = "task-text";
+      renderTaskTextInto(childText, child.text);
+      childLi.append(childText, makeIconBtn("▶️", "Resume", () => resumeTask(folder.id, child.id)));
+      sub.append(childLi);
+    }
+    li.append(sub);
+  }
 
   return li;
 }
@@ -723,7 +812,7 @@ function startEdit(listName, task, textNode) {
 /* ---------- toolbar ---------- */
 
 const TOOLBAR_ACTIONS_BY_TAB = {
-  tasks: ["complete", "delete", "send-calendar", "edit"],
+  tasks: ["complete", "delete", "send-calendar", "pause", "edit"],
   calendar: ["complete", "delete", "send-tasks", "edit"],
   completed: ["resurrect"],
   deleted: ["resurrect", "delete"],
@@ -735,6 +824,7 @@ function toolbarActionButtons() {
     delete: el.tbDelete,
     "send-calendar": el.tbSendCalendar,
     "send-tasks": el.tbSendTasks,
+    pause: el.tbPause,
     edit: el.tbEdit,
     resurrect: el.tbResurrect,
   };
@@ -742,15 +832,19 @@ function toolbarActionButtons() {
 
 function updateToolbar() {
   const allowed = new Set(TOOLBAR_ACTIONS_BY_TAB[currentTab] || []);
+  const selectedTask = selected && state[selected.listName]?.find((t) => t.id === selected.id);
+  // None of these actions mean anything for a folder itself (yet) — only
+  // its contents, via the per-child Resume button.
+  const selectedIsFolder = !!selectedTask && selectedTask.type === "folder";
   for (const [action, btn] of Object.entries(toolbarActionButtons())) {
     const isRelevant = allowed.has(action);
     btn.classList.toggle("hidden", !isRelevant);
-    btn.disabled = !isRelevant || !selected;
+    btn.disabled = !isRelevant || !selected || selectedIsFolder;
   }
   const deleteLabel = currentTab === "deleted" ? "Delete Permanently" : "Delete";
   el.tbDelete.title = deleteLabel;
   el.tbDelete.setAttribute("aria-label", deleteLabel);
-  renderDatePickerPopover();
+  renderActionPopover();
 }
 
 function buildDatePicker(onConfirm, onCancel) {
@@ -777,39 +871,85 @@ function buildDatePicker(onConfirm, onCancel) {
   return node;
 }
 
-function renderDatePickerPopover() {
-  el.appHeader.querySelector(".date-picker")?.remove();
-  if (!pendingDatePicker || !selected) return;
+function buildPausePicker(existingFolders, onConfirm, onCancel) {
+  const template = document.getElementById("pause-picker-template");
+  const node = template.content.firstElementChild.cloneNode(true);
+  const input = node.querySelector(".pause-picker-input");
+
+  const trySubmit = () => {
+    const value = input.value.trim();
+    if (value) onConfirm(value);
+  };
+  node.querySelector(".pause-picker-confirm").addEventListener("click", trySubmit);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      trySubmit();
+    }
+  });
+  node.querySelector(".pause-picker-cancel").addEventListener("click", onCancel);
+
+  const foldersWrap = node.querySelector(".pause-picker-folders");
+  for (const folder of existingFolders) {
+    const pill = document.createElement("button");
+    pill.type = "button";
+    pill.className = "pause-folder-pill";
+    pill.textContent = folder.blocker;
+    pill.addEventListener("click", () => onConfirm(folder.blocker));
+    foldersWrap.append(pill);
+  }
+  return node;
+}
+
+function renderActionPopover() {
+  el.appHeader.querySelector(".date-picker, .pause-picker")?.remove();
+  if (!pendingPopover || !selected) return;
   const { listName, id } = selected;
   if (!state[listName]?.some((t) => t.id === id)) {
-    pendingDatePicker = null;
+    pendingPopover = null;
     return;
   }
 
-  if (pendingDatePicker === "send-calendar") {
+  if (pendingPopover === "send-calendar") {
     el.appHeader.append(
       buildDatePicker(
         (date) => {
           selected = null;
-          pendingDatePicker = null;
+          pendingPopover = null;
           moveToCalendar(id, date);
         },
         () => {
-          pendingDatePicker = null;
+          pendingPopover = null;
           render();
         }
       )
     );
-  } else if (pendingDatePicker === "complete-recurring") {
+  } else if (pendingPopover === "complete-recurring") {
     el.appHeader.append(
       buildDatePicker(
         (date) => {
           selected = null;
-          pendingDatePicker = null;
+          pendingPopover = null;
           completeTask(listName, id, date);
         },
         () => {
-          pendingDatePicker = null;
+          pendingPopover = null;
+          render();
+        }
+      )
+    );
+  } else if (pendingPopover === "pause") {
+    const existingFolders = state.tasks.filter((t) => t.type === "folder");
+    el.appHeader.append(
+      buildPausePicker(
+        existingFolders,
+        (blockerName) => {
+          selected = null;
+          pendingPopover = null;
+          pauseTask(id, blockerName);
+        },
+        () => {
+          pendingPopover = null;
           render();
         }
       )
@@ -824,7 +964,7 @@ el.tbComplete.addEventListener("click", () => {
   if (!task) return;
   const recurrence = parseRecurrence(task.text);
   if (recurrence === "prompt") {
-    pendingDatePicker = "complete-recurring";
+    pendingPopover = "complete-recurring";
     render();
     return;
   }
@@ -846,7 +986,13 @@ el.tbDelete.addEventListener("click", () => {
 
 el.tbSendCalendar.addEventListener("click", () => {
   if (!selected) return;
-  pendingDatePicker = pendingDatePicker === "send-calendar" ? null : "send-calendar";
+  pendingPopover = pendingPopover === "send-calendar" ? null : "send-calendar";
+  render();
+});
+
+el.tbPause.addEventListener("click", () => {
+  if (!selected) return;
+  pendingPopover = pendingPopover === "pause" ? null : "pause";
   render();
 });
 
@@ -889,6 +1035,10 @@ function renderTasks() {
   el.tasksEmpty.classList.toggle("hidden", state.tasks.length > 0);
 
   state.tasks.forEach((task) => {
+    if (task.type === "folder") {
+      list.append(buildFolderRow(task));
+      return;
+    }
     const li = buildTaskRow("tasks", task);
     list.append(li);
     attachDragReorder(li, task);
@@ -955,7 +1105,7 @@ function activateTab(tabName) {
   document.getElementById(`${tabName}-panel`).classList.add("active");
   currentTab = tabName;
   selected = null;
-  pendingDatePicker = null;
+  pendingPopover = null;
 }
 
 el.tabs.addEventListener("click", (e) => {
@@ -1025,6 +1175,7 @@ function renderSearchResults() {
   const results = [];
   for (const listName of scope) {
     for (const task of state[listName]) {
+      if (task.type === "folder") continue; // no .text of its own to search
       if (!query || task.text.toLowerCase().includes(query)) {
         results.push({ listName, task });
       }

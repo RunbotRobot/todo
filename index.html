@@ -38,6 +38,7 @@
       <button id="tb-delete" class="icon-btn" title="Delete" disabled>🗑️</button>
       <button id="tb-send-calendar" class="icon-btn" title="Send to Calendar" disabled>➡️</button>
       <button id="tb-send-tasks" class="icon-btn" title="Send back to Tasks" disabled>⬅️</button>
+      <button id="tb-pause" class="icon-btn" title="Pause" disabled>⏸️</button>
       <button id="tb-edit" class="icon-btn" title="Edit" disabled>✏️</button>
       <button id="tb-resurrect" class="icon-btn" title="Resurrect (restore)" disabled>🧟</button>
     </div>
@@ -104,6 +105,17 @@
     <input type="date" class="date-picker-input">
     <button class="date-picker-confirm" title="Confirm date">✅</button>
     <button class="date-picker-cancel" title="Cancel">❌</button>
+  </div>
+</template>
+
+<template id="pause-picker-template">
+  <div class="pause-picker">
+    <div class="pause-picker-row">
+      <input type="text" class="pause-picker-input" placeholder="What's it waiting on?">
+      <button class="pause-picker-confirm" title="Pause">✅</button>
+      <button class="pause-picker-cancel" title="Cancel">❌</button>
+    </div>
+    <div class="pause-picker-folders"></div>
   </div>
 </template>
 
