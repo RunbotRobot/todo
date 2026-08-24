@@ -349,12 +349,11 @@ textarea {
   background: #fff6c9; /* pale yellow */
   border-color: #e8d478;
 }
-#tasks-list .task-item.folder {
-  /* Folders aren't draggable, so undo the grab cursor/gesture-claiming
-     above — matching specificity (id + 2 classes) is needed to win over
-     the rule above, not just the .task-item.folder rule on its own. */
-  cursor: pointer;
-  touch-action: manipulation;
+#tasks-list .task-item.folder.dragging {
+  /* Keep the folder's own red while dragging instead of the pale-yellow
+     drag highlight above — clearer that it's still a folder mid-move. */
+  background: var(--folder-bg-selected);
+  border-color: var(--folder-border-selected);
 }
 #tasks-list .drop-line {
   list-style: none;

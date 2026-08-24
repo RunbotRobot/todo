@@ -7,7 +7,7 @@ const FIREBASE_APP_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-ap
 const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "11";
+const APP_VERSION = "12";
 
 /* ---------- config resolution ---------- */
 
@@ -1036,7 +1036,9 @@ function renderTasks() {
 
   state.tasks.forEach((task) => {
     if (task.type === "folder") {
-      list.append(buildFolderRow(task));
+      const li = buildFolderRow(task);
+      list.append(li);
+      attachDragReorder(li, task);
       return;
     }
     const li = buildTaskRow("tasks", task);

@@ -52,7 +52,8 @@ paused inside, or ▶️ any task in it to send it back to the top of
 Tasks. Pausing a second task with the same blocker (typed again, or by
 tapping the folder's pill in the pause prompt instead of typing) adds
 it to that same folder rather than making a new one. A folder with
-nothing left in it disappears on its own.
+nothing left in it disappears on its own. Folders drag-reorder within
+Tasks the same as a regular task.
 
 ### Search
 
