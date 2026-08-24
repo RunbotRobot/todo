@@ -7,7 +7,7 @@ const FIREBASE_APP_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-ap
 const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "12";
+const APP_VERSION = "13";
 
 /* ---------- config resolution ---------- */
 
@@ -377,6 +377,18 @@ function resumeTask(folderId, taskId) {
   saveState();
 }
 
+// Used by dragging a task straight onto a folder — same destination as
+// pauseTask, but the folder is already known, so no name-matching needed.
+function addTaskToFolder(taskId, folderId) {
+  const folder = state.tasks.find((t) => t.id === folderId && t.type === "folder");
+  if (!folder) return;
+  const task = findAndRemove("tasks", taskId);
+  if (!task) return;
+  folder.tasks.unshift(task);
+  render();
+  saveState();
+}
+
 // insertIndex is the target position counted among the OTHER tasks (i.e.
 // the list with the dragged task already removed) — see computeDropIndex.
 function moveTaskTo(id, insertIndex) {
@@ -661,6 +673,26 @@ function removeDropLine(listEl) {
   listEl.querySelector(".drop-line")?.remove();
 }
 
+// Folder rows to drop a (non-folder) task directly into, captured once at
+// engage like everything else above. Empty when the dragged item is itself
+// a folder — folders don't merge into other folders via drag.
+function captureFolderTargets(listEl, draggedLi, draggedTask) {
+  if (draggedTask.type === "folder") return [];
+  return [...listEl.children]
+    .filter((elm) => elm !== draggedLi && elm.classList.contains("folder"))
+    .map((elm) => ({ id: elm.dataset.taskId, rect: elm.getBoundingClientRect() }));
+}
+
+function setDropTargetFolder(listEl, folderId) {
+  for (const elm of listEl.querySelectorAll(".task-item.folder")) {
+    elm.classList.toggle("drop-target", elm.dataset.taskId === folderId);
+  }
+}
+
+function clearDropTargetFolder(listEl) {
+  listEl.querySelector(".folder.drop-target")?.classList.remove("drop-target");
+}
+
 function attachDragReorder(li, task) {
   li.addEventListener("pointerdown", (e) => {
     if (e.target.closest("button, input, textarea")) return;
@@ -675,14 +707,17 @@ function attachDragReorder(li, task) {
     let engaged = false;
     let manualScrolling = false; // pre-engage swipe decided to be a scroll, not a drag
     let dropIndex = null;
+    let dropFolderId = null; // set instead of dropIndex while hovering a folder
     let siblingMidpoints = null;
     let gapPositions = null;
+    let folderTargets = null;
 
     function engage() {
       engaged = true;
       li.classList.add("dragging");
       siblingMidpoints = captureSiblingMidpoints(listEl, li);
       gapPositions = captureGapPositions(listEl, li);
+      folderTargets = captureFolderTargets(listEl, li, task);
       try { li.setPointerCapture(pointerId); } catch { /* ignore */ }
     }
 
@@ -715,6 +750,17 @@ function attachDragReorder(li, task) {
         }
       }
       ev.preventDefault();
+
+      const hovered = folderTargets.find((f) => ev.clientY >= f.rect.top && ev.clientY <= f.rect.bottom);
+      if (hovered) {
+        dropIndex = null;
+        dropFolderId = hovered.id;
+        removeDropLine(listEl);
+        setDropTargetFolder(listEl, hovered.id);
+        return;
+      }
+      dropFolderId = null;
+      clearDropTargetFolder(listEl);
       dropIndex = dropIndexForY(siblingMidpoints, ev.clientY);
       showDropLine(listEl, gapPositions[dropIndex]);
     }
@@ -725,7 +771,10 @@ function attachDragReorder(li, task) {
         try { li.releasePointerCapture(pointerId); } catch { /* ignore */ }
         li.classList.remove("dragging");
         removeDropLine(listEl);
-        if (shouldDrop && dropIndex !== null) {
+        clearDropTargetFolder(listEl);
+        if (shouldDrop && dropFolderId) {
+          addTaskToFolder(task.id, dropFolderId);
+        } else if (shouldDrop && dropIndex !== null) {
           moveTaskTo(task.id, dropIndex);
         }
         suppressClickUntil = Date.now() + 300;
@@ -1285,6 +1334,20 @@ async function connectFirebase(config) {
     mod = firestoreMod;
     const app = initializeApp(config);
     db = mod.getFirestore(app);
+
+    try {
+      // Lets the app read cached data and queue writes while offline, and
+      // syncs automatically once a connection comes back — including after
+      // fully closing and reopening the app, since the queue is persisted
+      // to IndexedDB rather than just held in memory for the page's
+      // lifetime. Can fail if another tab already holds the persistence
+      // lock, or the browser doesn't support it; the app still works
+      // either way, it just won't retain queued writes across a reload.
+      await mod.enableIndexedDbPersistence(db);
+    } catch (err) {
+      console.warn("Offline persistence not available", err.code || err);
+    }
+
     docRef = mod.doc(db, "todoApp", "main");
     fb = { setDoc: mod.setDoc, onSnapshot: mod.onSnapshot, runTransaction: mod.runTransaction };
   } catch (err) {
@@ -1295,6 +1358,7 @@ async function connectFirebase(config) {
 
   fb.onSnapshot(
     docRef,
+    { includeMetadataChanges: true },
     (snap) => {
       if (snap.exists()) {
         const data = snap.data();
@@ -1307,7 +1371,19 @@ async function connectFirebase(config) {
       } else {
         state = { tasks: [], calendar: [], completed: [], deleted: [] };
       }
-      setSyncStatus(""); // nothing to say when everything's fine
+      // fromCache means the SDK isn't currently reaching the server — a
+      // reliable "you're offline" signal, unlike hasPendingWrites alone
+      // (that's briefly true after any write even while fully online, just
+      // from ordinary ack latency).
+      if (snap.metadata.fromCache) {
+        setSyncStatus(
+          snap.metadata.hasPendingWrites
+            ? "Offline — changes saved locally, will sync once back online"
+            : "Offline — showing last synced data"
+        );
+      } else {
+        setSyncStatus(""); // connected and caught up
+      }
       render();
       promoteDueTasksIfNeeded();
     },
@@ -1333,3 +1409,15 @@ function boot() {
 }
 
 boot();
+
+// Precaches the app shell (and the Firebase SDK files) so the app can
+// still load with no connection at all, not just sync data once it's
+// already open. Registered after boot so it doesn't compete with the
+// page's own initial load.
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js").catch((err) => {
+      console.warn("Service worker registration failed", err);
+    });
+  });
+}

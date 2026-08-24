@@ -250,6 +250,11 @@ textarea {
   background: var(--folder-bg-selected);
   border-color: var(--folder-border-selected);
 }
+.task-item.folder.drop-target {
+  background: var(--folder-bg-selected);
+  outline: 3px solid var(--folder-border-selected);
+  outline-offset: -3px;
+}
 .folder-label {
   font-weight: 600;
 }

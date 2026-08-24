@@ -53,7 +53,9 @@ Tasks. Pausing a second task with the same blocker (typed again, or by
 tapping the folder's pill in the pause prompt instead of typing) adds
 it to that same folder rather than making a new one. A folder with
 nothing left in it disappears on its own. Folders drag-reorder within
-Tasks the same as a regular task.
+Tasks the same as a regular task, and you can also drag any task
+straight onto a folder to add it there without opening the pause
+prompt.
 
 ### Search
 
@@ -90,6 +92,29 @@ rather than saving it.
 
 The marker stays in the task's text, so the copy that lands on the
 Calendar keeps recurring the same way when you complete it again.
+
+## Offline use
+
+The app works with no connection: it loads from a cached copy (installed
+automatically the first time you visit while online), and any changes you
+make offline are queued and sent the next time it's back online — even
+across closing and reopening the app or restarting your device, since the
+queue is stored on-device rather than just held in memory.
+
+The header shows "Offline — changes saved locally, will sync once back
+online" (or "Offline — showing last synced data" if you haven't changed
+anything) whenever it can't reach the server; it's blank once everything's
+caught up.
+
+What this **doesn't** cover: syncing while the app is fully closed. Nothing
+runs in the background, so if you make changes on your phone with no
+signal and then use the app on another device before reopening it on your
+phone, the two devices' offline changes can conflict — the whole list is
+saved as one document, so whichever device syncs second overwrites the
+other's changes rather than merging them. Reopening the app (even briefly,
+enough for it to reconnect) after you're back in range avoids this by
+syncing right away, before you'd have a chance to make conflicting changes
+elsewhere.
 
 ## One-time setup
 
