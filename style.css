@@ -45,25 +45,37 @@ body {
 }
 .app-header-title {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   min-width: 0;
   flex-shrink: 1;
   overflow: hidden;
 }
-.app-header h1 {
-  font-size: 1.3rem;
-  margin: 0;
+/* Stacking the version under the title (instead of beside it) keeps the
+   title cluster's own width down to just "To-Do" — so it stays fully
+   visible instead of getting clipped by the toolbar on tabs with more
+   buttons enabled. Sized to fit within the toolbar buttons' 40px height,
+   so it doesn't grow the header and push the tabs down. */
+.app-title-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
   flex-shrink: 0;
 }
+.app-header h1 {
+  font-size: 1.1rem;
+  line-height: 1.15;
+  margin: 0;
+}
 .app-version {
-  font-size: 0.7rem;
+  font-size: 0.65rem;
+  line-height: 1.2;
   color: var(--muted);
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 4px;
-  padding: 1px 6px;
-  flex-shrink: 0;
+  padding: 0 5px;
 }
 .sync-status {
   font-size: 0.75rem;
@@ -541,4 +553,6 @@ textarea {
     min-height: 32px;
     font-size: 1rem;
   }
+  .app-header h1 { font-size: 0.95rem; }
+  .app-version { font-size: 0.55rem; }
 }
