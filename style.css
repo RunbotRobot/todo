@@ -309,6 +309,19 @@ textarea {
 .task-edit-area {
   flex: 1;
 }
+.folder-rename-input {
+  width: 100%;
+  font-size: 0.95rem;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-bg);
+  color: var(--text);
+}
+.folder-rename-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 .field-error {
   color: var(--danger);
   font-size: 0.85rem;

@@ -55,16 +55,18 @@ it to that same folder rather than making a new one. A folder with
 nothing left in it disappears on its own. Folders drag-reorder within
 Tasks the same as a regular task, and you can also drag any task
 straight onto a folder to add it there without opening the pause
-prompt.
+prompt. Select a folder and tap ✏️ to rename it — renaming it to match
+another existing folder merges the two.
 
 ### Search
 
 🔍 opens a search box that defaults to searching just the tab you were
 on; check or uncheck the Tasks/Calendar/Completed/Deleted boxes to widen
-or narrow it. Results show which tab they came from. Tapping a result
-closes search, jumps to that tab, scrolls to the task, and flashes it —
-for Tasks/Calendar/Deleted it also selects the task, so the toolbar is
-immediately ready to act on it.
+or narrow it. Results show which tab they came from — a paused task
+shows which folder it's in. Tapping a result closes search, jumps to
+that tab, scrolls to the task, and flashes it — for Tasks/Calendar/
+Deleted it also selects the task, so the toolbar is immediately ready
+to act on it; a paused task instead opens its folder so you can see it.
 
 ### Recurring tasks
 

@@ -7,7 +7,7 @@ const FIREBASE_APP_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-ap
 const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "14";
+const APP_VERSION = "15";
 
 /* ---------- config resolution ---------- */
 
@@ -360,6 +360,28 @@ function pauseTask(id, blockerName) {
   saveState();
 }
 
+// Renames a blocker folder. If another folder already has that name
+// (case-insensitively), merges this folder's tasks into it and removes this
+// one instead — mirrors how pausing a second task with the same blocker
+// joins the existing folder rather than making a duplicate.
+function renameFolder(folderId, newBlocker) {
+  const trimmed = newBlocker.trim();
+  if (!trimmed) return;
+  const folder = state.tasks.find((t) => t.id === folderId && t.type === "folder");
+  if (!folder) return;
+  const other = state.tasks.find(
+    (t) => t.type === "folder" && t.id !== folderId && t.blocker.toLowerCase() === trimmed.toLowerCase()
+  );
+  if (other) {
+    other.tasks.unshift(...folder.tasks);
+    findAndRemove("tasks", folderId);
+  } else {
+    folder.blocker = trimmed;
+  }
+  render();
+  saveState();
+}
+
 // Moves a task back out of its folder to the top of Tasks. Removes the
 // folder itself once it's empty.
 function resumeTask(folderId, taskId) {
@@ -564,10 +586,69 @@ function buildTaskRow(listName, task, metaText) {
   return li;
 }
 
+// Inline rename field for a folder's blocker name — same trigger (the
+// toolbar's edit button) and the same editingKey mechanism as task text
+// editing, just a plain text field instead of the smart textarea since a
+// blocker name is always a single short line.
+function buildFolderRenameField(folder) {
+  const wrap = document.createElement("div");
+  wrap.className = "task-edit-area";
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "folder-rename-input";
+  input.value = folder.blocker;
+
+  const doSave = () => {
+    editingKey = null;
+    renameFolder(folder.id, input.value);
+  };
+  const doCancel = () => {
+    editingKey = null;
+    render();
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      doSave();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      doCancel();
+    }
+  });
+
+  const actions = document.createElement("div");
+  actions.className = "task-edit-actions";
+  const saveBtn = document.createElement("button");
+  saveBtn.textContent = "Save";
+  saveBtn.addEventListener("click", doSave);
+  const cancelBtn = document.createElement("button");
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.addEventListener("click", doCancel);
+  actions.append(saveBtn, cancelBtn);
+  wrap.append(input, actions);
+  return wrap;
+}
+
+// Swaps a folder's label for the rename field in place, the same way
+// startEdit does for task text — editingKey blocks renderTasks() from
+// rebuilding the list out from under an in-progress edit, so entering edit
+// mode has to happen via direct DOM surgery rather than a normal render().
+function startFolderRename(folder, labelNode) {
+  editingKey = `tasks:${folder.id}`;
+  const container = labelNode.parentElement;
+  const field = buildFolderRenameField(folder);
+  container.replaceChild(field, labelNode);
+  const input = field.querySelector(".folder-rename-input");
+  input.focus();
+  input.select();
+}
+
 // A folder is "open" exactly when it's selected — no separate expanded-state
 // tracking needed, and it collapses for free whenever selection moves
-// elsewhere. Its own toolbar actions are all disabled (see updateToolbar);
-// the only thing you can do with its contents is resume one back to Tasks.
+// elsewhere. Its own toolbar actions are all disabled except edit, which
+// renames the folder instead of any of its tasks; the only thing you can do
+// with its contents is resume one back to Tasks.
 function buildFolderRow(folder) {
   const isOpen = isSelected("tasks", folder.id);
   const li = document.createElement("li");
@@ -584,7 +665,7 @@ function buildFolderRow(folder) {
   li.append(textWrap);
 
   li.addEventListener("click", (e) => {
-    if (e.target.closest("button")) return;
+    if (e.target.closest("button, input")) return;
     if (Date.now() < suppressClickUntil) return;
     selectTask("tasks", folder.id);
   });
@@ -595,6 +676,7 @@ function buildFolderRow(folder) {
     for (const child of folder.tasks) {
       const childLi = document.createElement("li");
       childLi.className = "task-item folder-child";
+      childLi.dataset.taskId = child.id;
       const childText = document.createElement("div");
       childText.className = "task-text";
       renderTaskTextInto(childText, child.text);
@@ -882,13 +964,14 @@ function toolbarActionButtons() {
 function updateToolbar() {
   const allowed = new Set(TOOLBAR_ACTIONS_BY_TAB[currentTab] || []);
   const selectedTask = selected && state[selected.listName]?.find((t) => t.id === selected.id);
-  // None of these actions mean anything for a folder itself (yet) — only
-  // its contents, via the per-child Resume button.
+  // Only "edit" (renaming the folder itself) applies to a folder selection —
+  // everything else here is about its contents, via the per-child Resume
+  // button.
   const selectedIsFolder = !!selectedTask && selectedTask.type === "folder";
   for (const [action, btn] of Object.entries(toolbarActionButtons())) {
     const isRelevant = allowed.has(action);
     btn.classList.toggle("hidden", !isRelevant);
-    btn.disabled = !isRelevant || !selected || selectedIsFolder;
+    btn.disabled = !isRelevant || !selected || (selectedIsFolder && action !== "edit");
   }
   const deleteLabel = currentTab === "deleted" ? "Delete Permanently" : "Delete";
   el.tbDelete.title = deleteLabel;
@@ -1056,9 +1139,18 @@ el.tbEdit.addEventListener("click", () => {
   if (!selected) return;
   const { listName, id } = selected;
   const task = state[listName]?.find((t) => t.id === id);
+  if (!task) return;
   const row = document.querySelector(`.task-item[data-task-id="${id}"]`);
+  if (task.type === "folder") {
+    const labelNode = row?.querySelector(".folder-label");
+    if (!labelNode) return;
+    selected = null;
+    startFolderRename(task, labelNode);
+    updateToolbar();
+    return;
+  }
   const textNode = row?.querySelector(".task-text");
-  if (!task || !textNode) return;
+  if (!textNode) return;
   selected = null;
   startEdit(listName, task, textNode);
   updateToolbar();
@@ -1210,7 +1302,8 @@ function getSearchScope() {
   return SEARCH_LISTS.filter((name) => document.getElementById(`search-scope-${name}`).checked);
 }
 
-function searchMetaFor(listName, task) {
+function searchMetaFor(listName, task, folder) {
+  if (folder) return `Tasks · Paused (${folder.blocker})`;
   switch (listName) {
     case "tasks": return "Tasks";
     case "calendar": return `Calendar · ${formatDate(task.targetDate)}`;
@@ -1226,7 +1319,16 @@ function renderSearchResults() {
   const results = [];
   for (const listName of scope) {
     for (const task of state[listName]) {
-      if (task.type === "folder") continue; // no .text of its own to search
+      if (task.type === "folder") {
+        // Folders only live in Tasks; their contents count as part of the
+        // Tasks scope too, tagged with which blocker they're paused under.
+        for (const child of task.tasks) {
+          if (!query || child.text.toLowerCase().includes(query)) {
+            results.push({ listName, task: child, folder: task });
+          }
+        }
+        continue;
+      }
       if (!query || task.text.toLowerCase().includes(query)) {
         results.push({ listName, task });
       }
@@ -1235,7 +1337,7 @@ function renderSearchResults() {
 
   el.searchResults.innerHTML = "";
   el.searchEmpty.classList.toggle("hidden", results.length > 0);
-  for (const { listName, task } of results) {
+  for (const { listName, task, folder } of results) {
     const li = document.createElement("li");
     li.className = "task-item selectable";
     const textWrap = document.createElement("div");
@@ -1243,19 +1345,22 @@ function renderSearchResults() {
     renderTaskTextInto(textWrap, task.text);
     const meta = document.createElement("div");
     meta.className = "task-meta";
-    meta.textContent = searchMetaFor(listName, task);
+    meta.textContent = searchMetaFor(listName, task, folder);
     li.append(textWrap, meta);
-    li.addEventListener("click", () => jumpToTask(listName, task.id));
+    li.addEventListener("click", () => jumpToTask(listName, task.id, folder));
     el.searchResults.append(li);
   }
 }
 
 // Closes search, switches to the task's tab, selects it so the toolbar can
 // act on it right away, and briefly flashes the row so it's easy to spot.
-function jumpToTask(listName, id) {
+// For a paused task, "selecting" it means opening its folder instead — a
+// folder's contents aren't individually selectable, only reachable by
+// expanding it — and the flash still targets the task's own row inside.
+function jumpToTask(listName, id, folder) {
   closeSearchPanel();
   activateTab(listName);
-  selected = { listName, id };
+  selected = folder ? { listName: "tasks", id: folder.id } : { listName, id };
   render();
 
   requestAnimationFrame(() => {
