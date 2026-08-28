@@ -95,6 +95,21 @@ rather than saving it.
 The marker stays in the task's text, so the copy that lands on the
 Calendar keeps recurring the same way when you complete it again.
 
+### Highlighting lines (checklists)
+
+While editing a task, tap **Highlight** (next to Cancel) to switch the
+editor into a click-to-mark view of the task's lines — tap any line to
+highlight it, tap again to un-highlight. It's meant for a task written as
+a checklist, where you want to mark off individual sub-items without
+completing the whole task. Tap **Highlight** again to go back to normal
+text editing (your marks are kept), then **Save**. Highlighted lines show
+with a yellow marker everywhere the task's text appears, not just while
+editing.
+
+Under the hood a highlighted line is just wrapped in `==...==`, so it's
+plain text like the recurrence markers — visible and editable by hand in
+the textarea too, not a hidden flag.
+
 ## Offline use
 
 The app works with no connection: it loads from a cached copy (installed

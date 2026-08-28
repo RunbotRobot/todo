@@ -7,7 +7,7 @@ const FIREBASE_APP_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-ap
 const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "15";
+const APP_VERSION = "16";
 
 /* ---------- config resolution ---------- */
 
@@ -498,7 +498,28 @@ function setCursor(el, pos) {
   el.selectionStart = el.selectionEnd = pos;
 }
 
-/* ---------- task text rendering (hanging indent) ---------- */
+/* ---------- task text rendering (hanging indent, line highlights) ---------- */
+
+// A highlighted line is stored as its content wrapped in "==...==" — plain,
+// visible text (like the [[...]] recurrence markers) rather than a separate
+// field, so it round-trips through the textarea and syncs as part of the
+// task's ordinary text.
+function isLineHighlighted(rest) {
+  return rest.length >= 4 && rest.startsWith("==") && rest.endsWith("==");
+}
+
+function lineDisplayText(rest) {
+  return isLineHighlighted(rest) ? rest.slice(2, -2) : rest;
+}
+
+// Leaves blank lines alone — there's nothing meaningful to mark.
+function toggleLineHighlightText(line) {
+  const leading = line.match(/^ */)[0].length;
+  const indent = line.slice(0, leading);
+  const rest = line.slice(leading);
+  if (rest === "") return line;
+  return isLineHighlighted(rest) ? indent + rest.slice(2, -2) : indent + "==" + rest + "==";
+}
 
 // Each logical line (split on \n) becomes its own block so a line that
 // wraps onto a second visual row hangs one indent level deeper than the
@@ -513,15 +534,32 @@ function renderTaskTextInto(container, text) {
     lineEl.style.paddingLeft = leading + INDENT.length + "ch";
     lineEl.style.textIndent = -INDENT.length + "ch";
     const rest = line.slice(leading);
-    if (rest === "") {
+    const displayText = lineDisplayText(rest);
+    if (displayText === "") {
       // A completely empty div collapses to zero height in most browsers —
       // this is what was silently swallowing blank lines between \n\n.
       lineEl.appendChild(document.createElement("br"));
+    } else if (isLineHighlighted(rest)) {
+      const mark = document.createElement("span");
+      mark.className = "text-highlight";
+      mark.textContent = displayText;
+      lineEl.appendChild(mark);
     } else {
-      lineEl.textContent = rest;
+      lineEl.textContent = displayText;
     }
     container.append(lineEl);
   }
+}
+
+// Fills the clickable line-picker shown while the "Highlight" toggle is on
+// during editing — same rendering as the read-only view, just with each
+// line wired up to flip its own highlight marker.
+function buildHighlightView(container, text, onLineClick) {
+  renderTaskTextInto(container, text);
+  [...container.children].forEach((lineEl, i) => {
+    lineEl.classList.add("highlight-clickable");
+    lineEl.addEventListener("click", () => onLineClick(i));
+  });
 }
 
 /* ---------- rendering ---------- */
@@ -918,19 +956,50 @@ function startEdit(listName, task, textNode) {
   attachSmartTextarea(textarea, { onSubmit: doSave });
   textarea.addEventListener("input", () => errorMsg.classList.add("hidden"));
 
+  // Highlight mode swaps the textarea for a rendered, click-to-toggle view
+  // of the same text — clicking a line flips its "==...==" marker directly
+  // in textarea.value, which stays the single source of truth either way,
+  // so Save/Cancel and the recurrence check don't need to know which view
+  // is currently showing.
+  const highlightView = document.createElement("div");
+  highlightView.className = "task-highlight-view hidden";
+
+  function rebuildHighlightView() {
+    buildHighlightView(highlightView, textarea.value, (i) => {
+      const lines = textarea.value.split("\n");
+      lines[i] = toggleLineHighlightText(lines[i]);
+      textarea.value = lines.join("\n");
+      rebuildHighlightView();
+    });
+  }
+
   const actions = document.createElement("div");
   actions.className = "task-edit-actions";
   const saveBtn = document.createElement("button");
   saveBtn.textContent = "Save";
   saveBtn.addEventListener("click", doSave);
+  const highlightBtn = document.createElement("button");
+  highlightBtn.type = "button";
+  highlightBtn.textContent = "Highlight";
+  highlightBtn.addEventListener("click", () => {
+    const highlightMode = textarea.classList.toggle("hidden");
+    highlightView.classList.toggle("hidden", !highlightMode);
+    highlightBtn.classList.toggle("active", highlightMode);
+    if (highlightMode) {
+      rebuildHighlightView();
+    } else {
+      autoResizeTextarea(textarea);
+      textarea.focus();
+    }
+  });
   const cancelBtn = document.createElement("button");
   cancelBtn.textContent = "Cancel";
   cancelBtn.addEventListener("click", () => {
     editingKey = null;
     render();
   });
-  actions.append(saveBtn, cancelBtn);
-  editWrap.append(textarea, errorMsg, actions);
+  actions.append(saveBtn, highlightBtn, cancelBtn);
+  editWrap.append(textarea, highlightView, errorMsg, actions);
 
   container.replaceChild(editWrap, textNode);
   // Re-measure now that the textarea is actually laid out in the live DOM —

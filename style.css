@@ -298,6 +298,18 @@ textarea {
   font-size: 0.95rem;
   line-height: 1.4;
 }
+.text-highlight {
+  background: #ffe066;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+.task-highlight-view .task-line.highlight-clickable {
+  cursor: pointer;
+  border-radius: 4px;
+}
+.task-highlight-view .task-line.highlight-clickable:hover {
+  background: var(--accent-bg);
+}
 
 .task-meta {
   font-size: 0.75rem;
@@ -338,6 +350,11 @@ textarea {
   border-radius: var(--radius);
   padding: 6px 10px;
   cursor: pointer;
+}
+.task-edit-actions button.active {
+  background: var(--accent-bg);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .icon-btn {
