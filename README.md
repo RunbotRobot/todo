@@ -14,6 +14,12 @@ The title, toolbar, and tabs stay pinned to the top as you scroll. The
 text next to the title is normally blank — it only says something when
 sync isn't in its normal state (connecting, offline, an error).
 
+Tabs show "Loading…" instead of their normal empty message until your
+data actually arrives — otherwise a brand new sign-in or a fast reload
+could flash "No tasks", which reads as "it's gone" rather than "still
+loading". Adding a task is disabled during that window too, since there'd
+be nothing yet to merge it with once your real list shows up.
+
 ## Tabs
 
 - **Tasks** — your sorted list. New tasks go to the top. Drag a task

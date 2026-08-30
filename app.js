@@ -8,7 +8,7 @@ const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/fireb
 const FIREBASE_AUTH_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "18";
+const APP_VERSION = "19";
 
 /* ---------- config resolution ---------- */
 
@@ -42,6 +42,7 @@ let auth = null;
 let authMod = null; // the firebase-auth module itself, once loaded
 let authUser = null; // current signed-in user (anonymous or Google-linked)
 let unsubscribeSnapshot = null; // detaches the previous doc's listener when the uid changes
+let dataLoaded = false; // true once the current user's doc has produced its first snapshot
 let editingKey = null; // "listName:id" while a task is being edited inline
 let selected = null; // { listName, id } — the task the toolbar buttons act on
 let pendingPopover = null; // "send-calendar" | "complete-recurring" | "pause" | null
@@ -204,7 +205,11 @@ function computeNextDate(recurrence, fromYmd) {
 /* ---------- persistence ---------- */
 
 async function saveState() {
-  if (!docRef || !fb) return;
+  // Guards against a real hazard, not just a cosmetic one: setDoc overwrites
+  // the whole document, so saving before the first snapshot has told us
+  // what's actually there (e.g. a task added in the instant the app opens)
+  // would wipe out everything else in it.
+  if (!docRef || !fb || !dataLoaded) return;
   try {
     await fb.setDoc(docRef, state);
   } catch (err) {
@@ -577,6 +582,11 @@ function render() {
   renderDeleted();
   updateToolbar();
   el.tbAccount.classList.toggle("linked", !!authUser && !authUser.isAnonymous);
+  // Adding a task before the first snapshot arrives would have nothing to
+  // merge with once it does — saveState() already refuses to save in that
+  // window (see its comment), so disable the entry point too rather than
+  // let someone type a task that then silently fails to persist.
+  el.tbAdd.disabled = !dataLoaded;
   if (!el.searchPanel.classList.contains("hidden")) renderSearchResults();
 }
 
@@ -1414,11 +1424,25 @@ el.tbResurrect.addEventListener("click", () => {
 
 /* ---------- list rendering ---------- */
 
+// Shows "Loading…" instead of the tab's real empty message until the first
+// snapshot for the current account has arrived — otherwise a brand new
+// sign-in or account switch flashes "No tasks" for a moment, which reads as
+// "my data is gone" rather than "still loading".
+function updateEmptyMessage(emptyEl, hasItems, emptyText) {
+  if (!dataLoaded) {
+    emptyEl.textContent = "Loading…";
+    emptyEl.classList.remove("hidden");
+  } else {
+    emptyEl.textContent = emptyText;
+    emptyEl.classList.toggle("hidden", hasItems);
+  }
+}
+
 function renderTasks() {
   if (editingKey && editingKey.startsWith("tasks:")) return;
   const list = el.tasksList;
   list.innerHTML = "";
-  el.tasksEmpty.classList.toggle("hidden", state.tasks.length > 0);
+  updateEmptyMessage(el.tasksEmpty, state.tasks.length > 0, "No tasks. Tap ➕ above to add one.");
 
   state.tasks.forEach((task) => {
     if (task.type === "folder") {
@@ -1437,7 +1461,7 @@ function renderCalendar() {
   if (editingKey && editingKey.startsWith("calendar:")) return;
   const container = el.calendarList;
   container.innerHTML = "";
-  el.calendarEmpty.classList.toggle("hidden", state.calendar.length > 0);
+  updateEmptyMessage(el.calendarEmpty, state.calendar.length > 0, "No tasks scheduled.");
 
   const groups = {};
   for (const task of state.calendar) {
@@ -1466,7 +1490,7 @@ function renderCalendar() {
 function renderCompleted() {
   const list = el.completedList;
   list.innerHTML = "";
-  el.completedEmpty.classList.toggle("hidden", state.completed.length > 0);
+  updateEmptyMessage(el.completedEmpty, state.completed.length > 0, "No completed tasks yet.");
 
   state.completed.forEach((task) => {
     const metaText = `Completed ${formatTimestamp(task.completedAt)}`;
@@ -1477,7 +1501,7 @@ function renderCompleted() {
 function renderDeleted() {
   const list = el.deletedList;
   list.innerHTML = "";
-  el.deletedEmpty.classList.toggle("hidden", state.deleted.length > 0);
+  updateEmptyMessage(el.deletedEmpty, state.deleted.length > 0, "Nothing deleted.");
 
   state.deleted.forEach((task) => {
     const metaText = `Deleted ${formatTimestamp(task.deletedAt)} (from ${task.sourceList === "calendar" ? "Calendar" : "Tasks"})`;
@@ -1683,11 +1707,21 @@ function attachUserDoc(uid) {
     unsubscribeSnapshot();
     unsubscribeSnapshot = null;
   }
+  // Not loaded again until this (possibly new) doc actually produces a
+  // snapshot — see the dataLoaded comment on saveState for why that guard
+  // matters, and renderTasks/etc. for the "Loading…" state this drives.
+  // Also clear state itself, so switching accounts can't flash the
+  // previous account's tasks alongside the "Loading…" message if something
+  // triggers a render before the new doc's first snapshot arrives.
+  dataLoaded = false;
+  state = { tasks: [], calendar: [], completed: [], deleted: [] };
+  render(); // shows "Loading…" immediately instead of leaving the previous account's list on screen
   docRef = fb.doc(db, "users", uid);
   unsubscribeSnapshot = fb.onSnapshot(
     docRef,
     { includeMetadataChanges: true },
     (snap) => {
+      dataLoaded = true;
       if (snap.exists()) {
         const data = snap.data();
         state = {
