@@ -8,7 +8,7 @@ const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/fireb
 const FIREBASE_AUTH_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "20";
+const APP_VERSION = "21";
 
 /* ---------- config resolution ---------- */
 
@@ -1239,6 +1239,25 @@ function buildBackupSection() {
 function buildAccountPopover() {
   const wrap = document.createElement("div");
   wrap.className = "account-popover";
+
+  // Unlike the other popovers, this one isn't tied to a task, so there's no
+  // natural action that closes it — it needs its own explicit close button
+  // (matching search's) rather than relying on re-tapping the toolbar icon.
+  const header = document.createElement("div");
+  header.className = "account-popover-header";
+  const title = document.createElement("strong");
+  title.textContent = "Account";
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "account-close-btn";
+  closeBtn.title = "Close";
+  closeBtn.textContent = "❌";
+  closeBtn.addEventListener("click", () => {
+    pendingPopover = null;
+    render();
+  });
+  header.append(title, closeBtn);
+  wrap.append(header);
 
   const status = document.createElement("p");
   status.className = "account-status";

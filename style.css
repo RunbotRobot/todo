@@ -520,6 +520,25 @@ textarea {
   border-top: 1px solid var(--border);
   margin: 10px 0;
 }
+.account-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.account-popover-header strong {
+  font-size: 0.9rem;
+}
+.account-close-btn {
+  border: 1px solid var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
 .account-status {
   margin: 0 0 8px;
   font-size: 0.9rem;
