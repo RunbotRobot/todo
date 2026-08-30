@@ -378,6 +378,9 @@ textarea {
   opacity: 0.3;
   cursor: default;
 }
+.icon-btn.linked {
+  background: var(--accent-bg);
+}
 
 #tasks-list {
   position: relative; /* anchors the absolutely-positioned .drop-line */
@@ -497,6 +500,65 @@ textarea {
   padding: 4px 10px;
   font-size: 0.85rem;
   cursor: pointer;
+}
+
+.account-popover {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 5;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+  width: max-content;
+  max-width: min(320px, 90vw);
+}
+.account-popover hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 10px 0;
+}
+.account-status {
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+}
+.account-hint {
+  margin: 8px 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.account-actions {
+  display: flex;
+  gap: 6px;
+}
+.account-actions button {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.account-backup-area {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+.account-backup-area textarea {
+  font-size: 0.75rem;
+  width: 100%;
+}
+.account-backup-area button {
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 0.85rem;
 }
 
 .calendar-list {

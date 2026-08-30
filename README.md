@@ -1,7 +1,10 @@
 # To-Do
 
-A simple, browser-based to-do list that syncs across devices. No accounts,
-no login, no build step — just static files plus a free Firebase database.
+A simple, browser-based to-do list that syncs across devices — no build
+step, just static files plus a free Firebase database. Everyone who opens
+it gets their own private list automatically (see [Accounts](#accounts)
+below), so it's safe to share the link and let people poke around without
+touching each other's — or your — data.
 
 A small version badge (`v1`, `v2`, ...) sits next to the title so you can
 tell whether the page you're looking at has picked up the latest deploy;
@@ -37,11 +40,32 @@ own visual formatting:
   back to the left margin.
 
 There are no buttons on task rows — tap a task to select it (it
-highlights), then use the toolbar in the header to act on it: 🔍 search ·
-➕ add · ✅ complete · 🗑️ delete · ➡️ send to Calendar · ⬅️ send back to
-Tasks · ⏸️ pause (see below) · ✏️ edit · 🧟 resurrect a completed or
-deleted task back to Tasks. Only the buttons relevant to the current tab
-are shown, and they're disabled until something is selected.
+highlights), then use the toolbar in the header to act on it: 👤 account
+(see below) · 🔍 search · ➕ add · ✅ complete · 🗑️ delete · ➡️ send to
+Calendar · ⬅️ send back to Tasks · ⏸️ pause (see below) · ✏️ edit · 🧟
+resurrect a completed or deleted task back to Tasks. Only the
+selection-based buttons relevant to the current tab are shown, and they're
+disabled until something is selected.
+
+### Accounts
+
+The moment you open the app you're signed in as a guest — no sign-up step,
+and your list is private to you from the first task you add. 👤 opens the
+account popover, which also shows the same JSON backup/restore tools
+described below.
+
+A guest account is tied to that one browser: clear your cookies/site data,
+or switch devices, and it starts you over with a fresh empty list. Tap
+**Sign in with Google** in the popover to save your list permanently to a
+Google account instead, so you can pick it back up on any other device by
+signing in there too. If that Google account is already linked to a
+*different* device's list, signing in offers to switch to that one instead
+— your current device's list gets replaced by it, so back it up first (via
+Export, below) if you want to keep both.
+
+**Export** / **Import** in the popover dump your whole list as JSON text
+(or restore from it) — a manual backup, and also how you'd move a list
+between accounts if you ever needed to.
 
 ### Pausing a blocked task
 
@@ -125,13 +149,13 @@ caught up.
 
 What this **doesn't** cover: syncing while the app is fully closed. Nothing
 runs in the background, so if you make changes on your phone with no
-signal and then use the app on another device before reopening it on your
-phone, the two devices' offline changes can conflict — the whole list is
-saved as one document, so whichever device syncs second overwrites the
-other's changes rather than merging them. Reopening the app (even briefly,
-enough for it to reconnect) after you're back in range avoids this by
-syncing right away, before you'd have a chance to make conflicting changes
-elsewhere.
+signal and then use the app on another device signed into the same
+account before reopening it on your phone, the two devices' offline
+changes can conflict — your list is saved as one document, so whichever
+device syncs second overwrites the other's changes rather than merging
+them. Reopening the app (even briefly, enough for it to reconnect) after
+you're back in range avoids this by syncing right away, before you'd have
+a chance to make conflicting changes elsewhere.
 
 ## One-time setup
 
@@ -157,26 +181,28 @@ This is all free at personal-use scale (the free "Spark" plan includes
 50,000 reads and 20,000 writes a day, far more than one person's to-do
 list will ever use).
 
-### 2. Set Firestore security rules
+### 2. Enable sign-in and set Firestore security rules
 
-Since this app has no login, go to **Firestore Database > Rules** and
-replace the contents with:
+Go to **Build > Authentication > Sign-in method** and enable two
+providers: **Anonymous**, and **Google** (it'll ask for a support email —
+your own is fine).
+
+Then go to **Firestore Database > Rules** and replace the contents with:
 
 ```
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /todoApp/main {
-      allow read, write: if true;
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
     }
   }
 }
 ```
 
-This scopes open access to just this app's single document (not your
-whole Firebase project). Anyone who obtained your site's Firebase config
-could read or edit your to-do list — which matches "nobody's going to
-mess with it," but is worth knowing.
+Each signed-in user (including guests) can only read and write their own
+document — nobody else's, guest or not. Nothing else in your Firestore
+project is exposed.
 
 ### 3. Connect the app to your project
 
@@ -196,11 +222,41 @@ Deploy from a branch**, branch `main`, folder `/ (root)`. Save. The site
 will be live at `https://runbotrobot.github.io/todo` within a minute or
 two.
 
+## Migrating from the old shared-list version
+
+Earlier versions of this app had no accounts — everyone shared one
+Firestore document (`todoApp/main`). If you're upgrading from that and
+have existing data there, it won't appear automatically once you deploy
+the per-user rules above (nothing reads that old document any more), but
+it isn't deleted either. To bring it over, once:
+
+1. Deploy the new code and rules above, then open the app and tap **Sign
+   in with Google** (👤) — this creates your new, permanent, empty
+   document.
+2. Temporarily add this to your Firestore rules (right below the
+   `/users/{userId}` block), so the app can read the old document one
+   more time:
+   ```
+   match /todoApp/main {
+     allow read: if request.auth != null;
+     allow write: if false;
+   }
+   ```
+3. Visit the app with `?legacy=1` added to the URL (e.g.
+   `https://runbotrobot.github.io/todo/?legacy=1`) while signed in with
+   Google — the account popover now shows an **Import old shared list**
+   button. Tap it and confirm.
+4. Remove the rules block you added in step 2 — it's a read hole into
+   your old data that no longer needs to exist once you've migrated.
+
+This is meant as a one-time bridge, not a permanent feature.
+
 ## Notes on how it works
 
-- All your data lives in one Firestore document. The app listens for
-  live changes, so edits on one device show up on others within a
-  second or two.
+- Each signed-in user's data lives in its own Firestore document
+  (`users/{uid}`). The app listens for live changes, so edits on one
+  device show up on your other devices signed into the same account
+  within a second or two.
 - The "move Calendar tasks to Tasks when their date arrives" check runs
   whenever the app is open (on load, and once a minute), comparing
   against your device's local date. It's not a server-side cron job —

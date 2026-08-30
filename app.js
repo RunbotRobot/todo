@@ -5,9 +5,10 @@ import { firebaseConfig as fileConfig } from "./config.js";
 // tabs, and editing all work purely client-side already.
 const FIREBASE_APP_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
 const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+const FIREBASE_AUTH_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "16";
+const APP_VERSION = "17";
 
 /* ---------- config resolution ---------- */
 
@@ -36,7 +37,11 @@ function resolveConfig() {
 let state = { tasks: [], calendar: [], completed: [], deleted: [] };
 let db = null;
 let docRef = null;
-let fb = null; // holds { setDoc, onSnapshot, runTransaction } once the SDK loads
+let fb = null; // holds { setDoc, onSnapshot, runTransaction, doc } once the SDK loads
+let auth = null;
+let authMod = null; // the firebase-auth module itself, once loaded
+let authUser = null; // current signed-in user (anonymous or Google-linked)
+let unsubscribeSnapshot = null; // detaches the previous doc's listener when the uid changes
 let editingKey = null; // "listName:id" while a task is being edited inline
 let selected = null; // { listName, id } — the task the toolbar buttons act on
 let pendingPopover = null; // "send-calendar" | "complete-recurring" | "pause" | null
@@ -52,6 +57,7 @@ const el = {
   appVersion: document.getElementById("app-version"),
   tabs: document.getElementById("tabs"),
   appHeader: document.querySelector(".app-header"),
+  tbAccount: document.getElementById("tb-account"),
   tbAdd: document.getElementById("tb-add"),
   tbComplete: document.getElementById("tb-complete"),
   tbDelete: document.getElementById("tb-delete"),
@@ -570,6 +576,7 @@ function render() {
   renderCompleted();
   renderDeleted();
   updateToolbar();
+  el.tbAccount.classList.toggle("linked", !!authUser && !authUser.isAnonymous);
   if (!el.searchPanel.classList.contains("hidden")) renderSearchResults();
 }
 
@@ -1102,8 +1109,228 @@ function buildPausePicker(existingFolders, onConfirm, onCancel) {
   return node;
 }
 
+/* ---------- account popover: sign-in state + JSON backup ---------- */
+
+// TEMPORARY (remove once the one-time migration off the old shared
+// todoApp/main document is done — see README): only shows the legacy
+// import button when explicitly asked for via ?legacy=1, so it isn't a
+// standing, publicly-clickable way to pull the old shared list into any
+// signed-in account.
+function legacyImportRequested() {
+  return new URLSearchParams(location.search).get("legacy") === "1";
+}
+
+function buildLegacyImportSection() {
+  const wrap = document.createElement("div");
+  wrap.className = "account-backup";
+
+  const label = document.createElement("p");
+  label.className = "account-hint";
+  label.textContent = "One-time: import the old shared list into this account.";
+  wrap.append(label);
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.textContent = "Import old shared list";
+  const errorMsg = document.createElement("p");
+  errorMsg.className = "field-error hidden";
+  btn.addEventListener("click", async () => {
+    errorMsg.classList.add("hidden");
+    try {
+      const snap = await fb.getDoc(fb.doc(db, "todoApp", "main"));
+      if (!snap.exists()) {
+        errorMsg.textContent = "No legacy document found.";
+        errorMsg.classList.remove("hidden");
+        return;
+      }
+      const data = snap.data();
+      if (!isValidBackupShape(data)) {
+        errorMsg.textContent = "Legacy document doesn't look like a to-do list.";
+        errorMsg.classList.remove("hidden");
+        return;
+      }
+      if (!window.confirm("Replace this account's list with the old shared list? This can't be undone.")) return;
+      pendingPopover = null;
+      applyBackup(data);
+    } catch (err) {
+      console.error("Legacy import failed", err);
+      errorMsg.textContent = "Import failed — check console (likely a security rules issue).";
+      errorMsg.classList.remove("hidden");
+    }
+  });
+  wrap.append(btn, errorMsg);
+  return wrap;
+}
+
+function serializeBackup() {
+  return JSON.stringify(state, null, 2);
+}
+
+function isValidBackupShape(obj) {
+  return !!obj && ["tasks", "calendar", "completed", "deleted"].every((k) => Array.isArray(obj[k]));
+}
+
+function applyBackup(obj) {
+  state = {
+    tasks: obj.tasks,
+    calendar: obj.calendar,
+    completed: obj.completed,
+    deleted: obj.deleted,
+  };
+  render();
+  saveState();
+}
+
+// A plain-text export/import round trip — handy as a general backup, and
+// specifically how existing data gets carried over onto a newly signed-in
+// account (there's no automatic migration, since guessing which uid "should"
+// inherit old data isn't safe to do automatically).
+function buildBackupSection() {
+  const wrap = document.createElement("div");
+  wrap.className = "account-backup";
+
+  const label = document.createElement("p");
+  label.className = "account-hint";
+  label.textContent = "Back up your list as text, or restore from a backup.";
+  wrap.append(label);
+
+  const row = document.createElement("div");
+  row.className = "account-actions";
+  const exportBtn = document.createElement("button");
+  exportBtn.textContent = "Export";
+  const importBtn = document.createElement("button");
+  importBtn.textContent = "Import";
+  row.append(exportBtn, importBtn);
+  wrap.append(row);
+
+  const exportArea = document.createElement("div");
+  exportArea.className = "account-backup-area hidden";
+  const exportTextarea = document.createElement("textarea");
+  exportTextarea.readOnly = true;
+  exportTextarea.rows = 6;
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.textContent = "Copy";
+  copyBtn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(exportTextarea.value);
+      copyBtn.textContent = "Copied!";
+      setTimeout(() => (copyBtn.textContent = "Copy"), 1500);
+    } catch {
+      exportTextarea.select(); // clipboard API unavailable — let them copy manually
+    }
+  });
+  exportArea.append(exportTextarea, copyBtn);
+  wrap.append(exportArea);
+
+  const importArea = document.createElement("div");
+  importArea.className = "account-backup-area hidden";
+  const importTextarea = document.createElement("textarea");
+  importTextarea.rows = 6;
+  importTextarea.placeholder = "Paste an exported backup here";
+  const loadBtn = document.createElement("button");
+  loadBtn.type = "button";
+  loadBtn.textContent = "Load backup";
+  const importError = document.createElement("p");
+  importError.className = "field-error hidden";
+  loadBtn.addEventListener("click", () => {
+    let parsed;
+    try {
+      parsed = JSON.parse(importTextarea.value);
+    } catch {
+      importError.textContent = "That doesn't look like valid backup JSON.";
+      importError.classList.remove("hidden");
+      return;
+    }
+    if (!isValidBackupShape(parsed)) {
+      importError.textContent = "That JSON doesn't look like a to-do backup.";
+      importError.classList.remove("hidden");
+      return;
+    }
+    if (!window.confirm("Replace this device's current list with the pasted backup? This can't be undone.")) {
+      return;
+    }
+    pendingPopover = null;
+    applyBackup(parsed);
+  });
+  importArea.append(importTextarea, loadBtn, importError);
+  wrap.append(importArea);
+
+  exportBtn.addEventListener("click", () => {
+    importArea.classList.add("hidden");
+    const nowHidden = exportArea.classList.toggle("hidden");
+    if (!nowHidden) {
+      exportTextarea.value = serializeBackup();
+      exportTextarea.select();
+    }
+  });
+  importBtn.addEventListener("click", () => {
+    exportArea.classList.add("hidden");
+    importArea.classList.toggle("hidden");
+  });
+
+  return wrap;
+}
+
+function buildAccountPopover() {
+  const wrap = document.createElement("div");
+  wrap.className = "account-popover";
+
+  const status = document.createElement("p");
+  status.className = "account-status";
+  const authRow = document.createElement("div");
+  authRow.className = "account-actions";
+
+  if (!authUser) {
+    status.textContent = "Connecting…";
+  } else if (authUser.isAnonymous) {
+    status.textContent = "Using a guest list on this device only.";
+    const googleBtn = document.createElement("button");
+    googleBtn.textContent = "Sign in with Google";
+    googleBtn.addEventListener("click", () => {
+      pendingPopover = null;
+      render();
+      signInWithGoogleUpgrade();
+    });
+    authRow.append(googleBtn);
+  } else {
+    status.textContent = `Signed in as ${authUser.email || authUser.displayName || "your Google account"}.`;
+    const signOutBtn = document.createElement("button");
+    signOutBtn.textContent = "Sign out";
+    signOutBtn.addEventListener("click", () => {
+      pendingPopover = null;
+      render();
+      signOutAccount();
+    });
+    authRow.append(signOutBtn);
+  }
+  wrap.append(status, authRow);
+
+  if (authUser && authUser.isAnonymous) {
+    const hint = document.createElement("p");
+    hint.className = "account-hint";
+    hint.textContent = "Saves this list to your Google account so you can pick it up on other devices.";
+    wrap.append(hint);
+  }
+
+  wrap.append(document.createElement("hr"), buildBackupSection());
+
+  if (legacyImportRequested() && authUser && !authUser.isAnonymous) {
+    wrap.append(document.createElement("hr"), buildLegacyImportSection());
+  }
+
+  return wrap;
+}
+
 function renderActionPopover() {
-  el.appHeader.querySelector(".date-picker, .pause-picker")?.remove();
+  el.appHeader.querySelector(".date-picker, .pause-picker, .account-popover")?.remove();
+  // Unlike the others below, the account popover isn't about a selected
+  // task — it's always available regardless of what (if anything) is
+  // selected.
+  if (pendingPopover === "account") {
+    el.appHeader.append(buildAccountPopover());
+    return;
+  }
   if (!pendingPopover || !selected) return;
   const { listName, id } = selected;
   if (!state[listName]?.some((t) => t.id === id)) {
@@ -1157,6 +1384,11 @@ function renderActionPopover() {
     );
   }
 }
+
+el.tbAccount.addEventListener("click", () => {
+  pendingPopover = pendingPopover === "account" ? null : "account";
+  render();
+});
 
 el.tbComplete.addEventListener("click", () => {
   if (!selected) return;
@@ -1497,40 +1729,18 @@ el.configSave.addEventListener("click", () => {
 
 /* ---------- boot ---------- */
 
-async function connectFirebase(config) {
-  setSyncStatus("Connecting…");
-  let mod;
-  try {
-    const [{ initializeApp }, firestoreMod] = await Promise.all([
-      import(/* @vite-ignore */ FIREBASE_APP_URL),
-      import(/* @vite-ignore */ FIREBASE_FIRESTORE_URL),
-    ]);
-    mod = firestoreMod;
-    const app = initializeApp(config);
-    db = mod.getFirestore(app);
-
-    try {
-      // Lets the app read cached data and queue writes while offline, and
-      // syncs automatically once a connection comes back — including after
-      // fully closing and reopening the app, since the queue is persisted
-      // to IndexedDB rather than just held in memory for the page's
-      // lifetime. Can fail if another tab already holds the persistence
-      // lock, or the browser doesn't support it; the app still works
-      // either way, it just won't retain queued writes across a reload.
-      await mod.enableIndexedDbPersistence(db);
-    } catch (err) {
-      console.warn("Offline persistence not available", err.code || err);
-    }
-
-    docRef = mod.doc(db, "todoApp", "main");
-    fb = { setDoc: mod.setDoc, onSnapshot: mod.onSnapshot, runTransaction: mod.runTransaction };
-  } catch (err) {
-    console.error("Failed to load Firebase SDK", err);
-    setSyncStatus("Couldn't load Firebase — check your connection and reload", true);
-    return;
+// Each signed-in user (anonymous or Google-linked) gets their own document
+// at users/{uid}, instead of everyone sharing one — see attachUserDoc.
+// Detaches the previous listener first, since this runs again whenever the
+// signed-in uid changes (first sign-in, linking to Google, or switching to
+// an already-linked account on a different device).
+function attachUserDoc(uid) {
+  if (unsubscribeSnapshot) {
+    unsubscribeSnapshot();
+    unsubscribeSnapshot = null;
   }
-
-  fb.onSnapshot(
+  docRef = fb.doc(db, "users", uid);
+  unsubscribeSnapshot = fb.onSnapshot(
     docRef,
     { includeMetadataChanges: true },
     (snap) => {
@@ -1566,8 +1776,114 @@ async function connectFirebase(config) {
       setSyncStatus("Sync error — check console / Firestore rules", true);
     }
   );
+}
+
+// Every visitor gets an anonymous account automatically, so everyone's data
+// is isolated from the start with no sign-up step. "Sign in with Google"
+// (see signInWithGoogleUpgrade) is optional, for anyone who wants their list
+// to follow them across devices instead of staying tied to one browser.
+async function connectFirebase(config) {
+  setSyncStatus("Connecting…");
+  try {
+    const [{ initializeApp }, firestoreMod, aMod] = await Promise.all([
+      import(/* @vite-ignore */ FIREBASE_APP_URL),
+      import(/* @vite-ignore */ FIREBASE_FIRESTORE_URL),
+      import(/* @vite-ignore */ FIREBASE_AUTH_URL),
+    ]);
+    authMod = aMod;
+    const app = initializeApp(config);
+    db = firestoreMod.getFirestore(app);
+    auth = authMod.getAuth(app);
+
+    try {
+      // Lets the app read cached data and queue writes while offline, and
+      // syncs automatically once a connection comes back — including after
+      // fully closing and reopening the app, since the queue is persisted
+      // to IndexedDB rather than just held in memory for the page's
+      // lifetime. Can fail if another tab already holds the persistence
+      // lock, or the browser doesn't support it; the app still works
+      // either way, it just won't retain queued writes across a reload.
+      await firestoreMod.enableIndexedDbPersistence(db);
+    } catch (err) {
+      console.warn("Offline persistence not available", err.code || err);
+    }
+
+    fb = {
+      setDoc: firestoreMod.setDoc,
+      getDoc: firestoreMod.getDoc,
+      onSnapshot: firestoreMod.onSnapshot,
+      runTransaction: firestoreMod.runTransaction,
+      doc: firestoreMod.doc,
+    };
+  } catch (err) {
+    console.error("Failed to load Firebase SDK", err);
+    setSyncStatus("Couldn't load Firebase — check your connection and reload", true);
+    return;
+  }
+
+  authMod.onAuthStateChanged(auth, (user) => {
+    authUser = user;
+    render(); // refreshes the account popover / button if it's showing
+    if (user) {
+      attachUserDoc(user.uid);
+    } else {
+      authMod.signInAnonymously(auth).catch((err) => {
+        console.error("Anonymous sign-in failed", err);
+        setSyncStatus("Couldn't sign in — check your connection and reload", true);
+      });
+    }
+  });
 
   setInterval(promoteDueTasksIfNeeded, 60 * 1000);
+}
+
+// Upgrades the current guest (anonymous) session to a Google account, or
+// signs in directly if already past that. If this Google account is
+// already linked to a DIFFERENT device's account, linking fails with
+// "credential-already-in-use" — offer to switch to that existing account
+// instead, which is what makes it possible to pick the same list back up
+// on a second device.
+async function signInWithGoogleUpgrade() {
+  if (!auth || !authMod) return;
+  const provider = new authMod.GoogleAuthProvider();
+  try {
+    if (auth.currentUser && auth.currentUser.isAnonymous) {
+      await authMod.linkWithPopup(auth.currentUser, provider);
+    } else {
+      await authMod.signInWithPopup(auth, provider);
+    }
+  } catch (err) {
+    if (err.code === "auth/credential-already-in-use") {
+      const proceed = window.confirm(
+        "This Google account already has a saved list from another device. Switch to it? " +
+          "This device's current list will be replaced by that one."
+      );
+      if (proceed) {
+        const cred = authMod.GoogleAuthProvider.credentialFromError(err);
+        try {
+          await authMod.signInWithCredential(auth, cred);
+        } catch (err2) {
+          console.error("Google sign-in failed", err2);
+          setSyncStatus("Google sign-in failed — check console", true);
+        }
+      }
+    } else if (err.code !== "auth/popup-closed-by-user" && err.code !== "auth/cancelled-popup-request") {
+      console.error("Google sign-in failed", err);
+      setSyncStatus("Google sign-in failed — check console", true);
+    }
+  }
+}
+
+// Drops back to a fresh anonymous session on this device — onAuthStateChanged
+// (see connectFirebase) notices the signed-out state and signs back in
+// anonymously automatically, landing on a brand new empty guest list.
+async function signOutAccount() {
+  if (!auth || !authMod) return;
+  try {
+    await authMod.signOut(auth);
+  } catch (err) {
+    console.error("Sign-out failed", err);
+  }
 }
 
 function boot() {

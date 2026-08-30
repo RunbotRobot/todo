@@ -1,10 +1,10 @@
 // Bump this alongside APP_VERSION in app.js whenever a change ships — it's
 // what forces the cached app shell to refresh instead of serving a stale
 // version indefinitely.
-const CACHE_VERSION = "v13";
+const CACHE_VERSION = "v14";
 const CACHE_NAME = `todo-shell-${CACHE_VERSION}`;
 
-// Same-origin app shell, plus the two pinned-version Firebase SDK files —
+// Same-origin app shell, plus the three pinned-version Firebase SDK files —
 // those specific URLs never change content (immutable, 1-year cache
 // headers), so caching them here is safe and lets the app boot offline
 // even on a cold start with nothing else cached yet.
@@ -19,11 +19,13 @@ const PRECACHE_URLS = [
   "./icons/icon-512.png",
   "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js",
   "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js",
+  "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js",
 ];
 
-// Firestore's own network traffic (firestore.googleapis.com and friends)
-// must never be touched by this worker — it isn't simple cacheable
-// request/response traffic, and Firestore already manages its own offline
+// Firestore's and Auth's own network traffic (firestore.googleapis.com,
+// identitytoolkit.googleapis.com, accounts.google.com and friends) must
+// never be touched by this worker — none of it is simple cacheable
+// request/response traffic, and both SDKs already manage their own offline
 // queueing and reconnection.
 const CACHEABLE_ORIGINS = new Set([self.location.origin, "https://www.gstatic.com"]);
 
