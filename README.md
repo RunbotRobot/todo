@@ -187,6 +187,12 @@ Go to **Build > Authentication > Sign-in method** and enable two
 providers: **Anonymous**, and **Google** (it'll ask for a support email —
 your own is fine).
 
+Then, in **Authentication > Settings > Authorized domains**, add the
+domain your site is actually served from (e.g. `runbotrobot.github.io`).
+Google sign-in's popup is blocked from any origin not on this list — it's
+not there by default for a custom/GitHub Pages domain, only for
+`localhost` and the project's own `firebaseapp.com`/`web.app` domains.
+
 Then go to **Firestore Database > Rules** and replace the contents with:
 
 ```
@@ -221,35 +227,6 @@ In this repo: **Settings > Pages > Build and deployment > Source:
 Deploy from a branch**, branch `main`, folder `/ (root)`. Save. The site
 will be live at `https://runbotrobot.github.io/todo` within a minute or
 two.
-
-## Migrating from the old shared-list version
-
-Earlier versions of this app had no accounts — everyone shared one
-Firestore document (`todoApp/main`). If you're upgrading from that and
-have existing data there, it won't appear automatically once you deploy
-the per-user rules above (nothing reads that old document any more), but
-it isn't deleted either. To bring it over, once:
-
-1. Deploy the new code and rules above, then open the app and tap **Sign
-   in with Google** (👤) — this creates your new, permanent, empty
-   document.
-2. Temporarily add this to your Firestore rules (right below the
-   `/users/{userId}` block), so the app can read the old document one
-   more time:
-   ```
-   match /todoApp/main {
-     allow read: if request.auth != null;
-     allow write: if false;
-   }
-   ```
-3. Visit the app with `?legacy=1` added to the URL (e.g.
-   `https://runbotrobot.github.io/todo/?legacy=1`) while signed in with
-   Google — the account popover now shows an **Import old shared list**
-   button. Tap it and confirm.
-4. Remove the rules block you added in step 2 — it's a read hole into
-   your old data that no longer needs to exist once you've migrated.
-
-This is meant as a one-time bridge, not a permanent feature.
 
 ## Notes on how it works
 

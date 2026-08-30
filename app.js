@@ -8,7 +8,7 @@ const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/fireb
 const FIREBASE_AUTH_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "17";
+const APP_VERSION = "18";
 
 /* ---------- config resolution ---------- */
 
@@ -1111,57 +1111,6 @@ function buildPausePicker(existingFolders, onConfirm, onCancel) {
 
 /* ---------- account popover: sign-in state + JSON backup ---------- */
 
-// TEMPORARY (remove once the one-time migration off the old shared
-// todoApp/main document is done — see README): only shows the legacy
-// import button when explicitly asked for via ?legacy=1, so it isn't a
-// standing, publicly-clickable way to pull the old shared list into any
-// signed-in account.
-function legacyImportRequested() {
-  return new URLSearchParams(location.search).get("legacy") === "1";
-}
-
-function buildLegacyImportSection() {
-  const wrap = document.createElement("div");
-  wrap.className = "account-backup";
-
-  const label = document.createElement("p");
-  label.className = "account-hint";
-  label.textContent = "One-time: import the old shared list into this account.";
-  wrap.append(label);
-
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.textContent = "Import old shared list";
-  const errorMsg = document.createElement("p");
-  errorMsg.className = "field-error hidden";
-  btn.addEventListener("click", async () => {
-    errorMsg.classList.add("hidden");
-    try {
-      const snap = await fb.getDoc(fb.doc(db, "todoApp", "main"));
-      if (!snap.exists()) {
-        errorMsg.textContent = "No legacy document found.";
-        errorMsg.classList.remove("hidden");
-        return;
-      }
-      const data = snap.data();
-      if (!isValidBackupShape(data)) {
-        errorMsg.textContent = "Legacy document doesn't look like a to-do list.";
-        errorMsg.classList.remove("hidden");
-        return;
-      }
-      if (!window.confirm("Replace this account's list with the old shared list? This can't be undone.")) return;
-      pendingPopover = null;
-      applyBackup(data);
-    } catch (err) {
-      console.error("Legacy import failed", err);
-      errorMsg.textContent = "Import failed — check console (likely a security rules issue).";
-      errorMsg.classList.remove("hidden");
-    }
-  });
-  wrap.append(btn, errorMsg);
-  return wrap;
-}
-
 function serializeBackup() {
   return JSON.stringify(state, null, 2);
 }
@@ -1314,11 +1263,6 @@ function buildAccountPopover() {
   }
 
   wrap.append(document.createElement("hr"), buildBackupSection());
-
-  if (legacyImportRequested() && authUser && !authUser.isAnonymous) {
-    wrap.append(document.createElement("hr"), buildLegacyImportSection());
-  }
-
   return wrap;
 }
 
@@ -1810,7 +1754,6 @@ async function connectFirebase(config) {
 
     fb = {
       setDoc: firestoreMod.setDoc,
-      getDoc: firestoreMod.getDoc,
       onSnapshot: firestoreMod.onSnapshot,
       runTransaction: firestoreMod.runTransaction,
       doc: firestoreMod.doc,
