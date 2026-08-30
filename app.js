@@ -8,7 +8,7 @@ const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/fireb
 const FIREBASE_AUTH_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "19";
+const APP_VERSION = "20";
 
 /* ---------- config resolution ---------- */
 
@@ -386,8 +386,10 @@ function renameFolder(folderId, newBlocker) {
   if (other) {
     other.tasks.unshift(...folder.tasks);
     findAndRemove("tasks", folderId);
+    selected = { listName: "tasks", id: other.id }; // the merged-away id no longer exists
   } else {
     folder.blocker = trimmed;
+    selected = { listName: "tasks", id: folderId };
   }
   render();
   saveState();
@@ -660,6 +662,7 @@ function buildFolderRenameField(folder) {
   };
   const doCancel = () => {
     editingKey = null;
+    selected = { listName: "tasks", id: folder.id };
     render();
   };
   input.addEventListener("keydown", (e) => {
@@ -964,6 +967,7 @@ function startEdit(listName, task, textNode) {
       return;
     }
     editingKey = null;
+    selected = { listName, id: task.id };
     editTaskText(listName, task.id, textarea.value);
   };
 
@@ -1013,6 +1017,7 @@ function startEdit(listName, task, textNode) {
   cancelBtn.textContent = "Cancel";
   cancelBtn.addEventListener("click", () => {
     editingKey = null;
+    selected = { listName, id: task.id };
     render();
   });
   actions.append(saveBtn, highlightBtn, cancelBtn);
