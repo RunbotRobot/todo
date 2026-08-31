@@ -8,7 +8,7 @@ const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/fireb
 const FIREBASE_AUTH_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "21";
+const APP_VERSION = "22";
 
 /* ---------- config resolution ---------- */
 
@@ -58,6 +58,7 @@ const el = {
   appVersion: document.getElementById("app-version"),
   tabs: document.getElementById("tabs"),
   appHeader: document.querySelector(".app-header"),
+  appTop: document.getElementById("app-top"),
   tbAccount: document.getElementById("tb-account"),
   tbAdd: document.getElementById("tb-add"),
   tbComplete: document.getElementById("tb-complete"),
@@ -753,22 +754,26 @@ function buildFolderRow(folder) {
 // engages — i.e. before the drop-line exists. Re-measuring live on every
 // move would be wrong: once the line is inserted it pushes later siblings
 // down, which would shift their midpoints and make the line "stick" short
-// of where the pointer actually is.
+// of where the pointer actually is. Stored as page-absolute Y (+scrollY)
+// rather than viewport-relative, so they stay correct across the auto-scroll
+// that can now happen mid-drag — a plain getBoundingClientRect() value would
+// go stale the moment the page scrolls out from under a stationary pointer.
 function captureSiblingMidpoints(listEl, draggedLi) {
   const siblings = [...listEl.children].filter(
     (elm) => elm !== draggedLi && !elm.classList.contains("drop-line")
   );
   return siblings.map((elm) => {
     const rect = elm.getBoundingClientRect();
-    return rect.top + rect.height / 2;
+    return rect.top + window.scrollY + rect.height / 2;
   });
 }
 
 // Index is counted among the OTHER (non-dragged) tasks — i.e. where the
-// dragged item would land if spliced into that list.
-function dropIndexForY(midpoints, clientY) {
+// dragged item would land if spliced into that list. pageY is page-absolute
+// (clientY + scrollY), matching the midpoints above.
+function dropIndexForY(midpoints, pageY) {
   for (let i = 0; i < midpoints.length; i++) {
-    if (clientY < midpoints[i]) return i;
+    if (pageY < midpoints[i]) return i;
   }
   return midpoints.length;
 }
@@ -815,12 +820,16 @@ function removeDropLine(listEl) {
 
 // Folder rows to drop a (non-folder) task directly into, captured once at
 // engage like everything else above. Empty when the dragged item is itself
-// a folder — folders don't merge into other folders via drag.
+// a folder — folders don't merge into other folders via drag. top/bottom are
+// page-absolute (+scrollY), same reasoning as captureSiblingMidpoints.
 function captureFolderTargets(listEl, draggedLi, draggedTask) {
   if (draggedTask.type === "folder") return [];
   return [...listEl.children]
     .filter((elm) => elm !== draggedLi && elm.classList.contains("folder"))
-    .map((elm) => ({ id: elm.dataset.taskId, rect: elm.getBoundingClientRect() }));
+    .map((elm) => {
+      const rect = elm.getBoundingClientRect();
+      return { id: elm.dataset.taskId, top: rect.top + window.scrollY, bottom: rect.bottom + window.scrollY };
+    });
 }
 
 function setDropTargetFolder(listEl, folderId) {
@@ -833,14 +842,73 @@ function clearDropTargetFolder(listEl) {
   listEl.querySelector(".folder.drop-target")?.classList.remove("drop-target");
 }
 
+/* ---------- auto-scroll while dragging, and momentum after a manual scroll ---------- */
+
+const EDGE_ZONE = 70; // px from the visible top/bottom edge that triggers auto-scroll while dragging
+const MAX_AUTOSCROLL_SPEED = 16; // px per animation frame at the very edge
+
+// A page-absolute Y a scroll-driven auto-scroll or momentum fling can't
+// exceed, matching the browser's own scroll clamping — window.scrollTo
+// already clamps, but computing this lets both features stop cleanly
+// instead of endlessly scheduling frames once they've hit the end.
+function maxScrollY() {
+  return document.documentElement.scrollHeight - window.innerHeight;
+}
+
+// Lets a fresh touch cancel a fling still in progress from a previous one —
+// the natural "tap to stop" most native scroll views have. Module-level
+// since it isn't scoped to any one row's drag gesture.
+let momentumRAF = null;
+function stopMomentumScroll() {
+  if (momentumRAF) {
+    cancelAnimationFrame(momentumRAF);
+    momentumRAF = null;
+  }
+}
+
+// pxPerMs is signed velocity at the moment of release. Decays it by
+// friction every frame until it's imperceptible, continuing the scroll
+// the way a touch scroll keeps gliding after you lift your finger instead
+// of stopping dead — this app takes over scrolling with touch-action:none
+// on task rows (see attachDragReorder), so it has to reproduce that itself
+// rather than getting it for free from the browser.
+function startMomentumScroll(pxPerMs) {
+  stopMomentumScroll();
+  const FRICTION = 0.95; // per-frame decay
+  const MIN_SPEED = 0.02; // px/ms — below this it's not worth another frame
+  let velocity = pxPerMs;
+  let lastTime = performance.now();
+
+  function step(now) {
+    const dt = now - lastTime;
+    lastTime = now;
+    velocity *= FRICTION;
+    if (Math.abs(velocity) < MIN_SPEED) {
+      momentumRAF = null;
+      return;
+    }
+    const next = Math.max(0, Math.min(maxScrollY(), window.scrollY + velocity * dt));
+    if (next === window.scrollY) {
+      momentumRAF = null; // hit the top or bottom of the page
+      return;
+    }
+    window.scrollTo(0, next);
+    momentumRAF = requestAnimationFrame(step);
+  }
+  momentumRAF = requestAnimationFrame(step);
+}
+
 function attachDragReorder(li, task) {
   li.addEventListener("pointerdown", (e) => {
     if (e.target.closest("button, input, textarea")) return;
     if (e.pointerType === "mouse" && e.button !== 0) return;
+    stopMomentumScroll(); // a new touch always takes over from a fling in progress
 
     const listEl = el.tasksList;
     const startY = e.clientY;
     let lastY = e.clientY;
+    let lastMoveTime = performance.now();
+    let scrollVelocity = 0; // px/ms, for momentum once a manual scroll is released
     const pointerId = e.pointerId;
     const isTouch = e.pointerType !== "mouse";
     let longPressTimer = null;
@@ -851,6 +919,9 @@ function attachDragReorder(li, task) {
     let siblingMidpoints = null;
     let gapPositions = null;
     let folderTargets = null;
+    let lastClientY = null; // last real pointer position, reused by the auto-scroll loop below
+    let autoScrollSpeed = 0; // px per frame, signed; 0 means not auto-scrolling
+    let autoScrollRAF = null;
 
     function engage() {
       engaged = true;
@@ -861,6 +932,71 @@ function attachDragReorder(li, task) {
       try { li.setPointerCapture(pointerId); } catch { /* ignore */ }
     }
 
+    // Shared between real pointer moves and the auto-scroll loop below (which
+    // re-runs this each frame using the last known pointer position, since
+    // the page moving under a still finger changes the target the same way
+    // the finger moving would).
+    function updateDropTarget(clientY) {
+      const pageY = clientY + window.scrollY;
+      const hovered = folderTargets.find((f) => pageY >= f.top && pageY <= f.bottom);
+      if (hovered) {
+        dropIndex = null;
+        dropFolderId = hovered.id;
+        removeDropLine(listEl);
+        setDropTargetFolder(listEl, hovered.id);
+        return;
+      }
+      dropFolderId = null;
+      clearDropTargetFolder(listEl);
+      dropIndex = dropIndexForY(siblingMidpoints, pageY);
+      showDropLine(listEl, gapPositions[dropIndex]);
+    }
+
+    // Dragging near the top or bottom of the visible area scrolls the page,
+    // the way most drag-to-reorder lists do — otherwise a task could never
+    // be dragged to a position that isn't already on screen. Speed ramps up
+    // the closer the pointer is to the edge. Runs via its own rAF loop so it
+    // keeps going while the pointer holds still near the edge, not just on
+    // each new pointermove.
+    function updateAutoScroll(clientY) {
+      const headerBottom = el.appTop.getBoundingClientRect().bottom;
+      const viewportHeight = window.innerHeight;
+      if (clientY < headerBottom + EDGE_ZONE) {
+        const depth = Math.min(1, (headerBottom + EDGE_ZONE - clientY) / EDGE_ZONE);
+        autoScrollSpeed = -Math.ceil(MAX_AUTOSCROLL_SPEED * depth);
+      } else if (clientY > viewportHeight - EDGE_ZONE) {
+        const depth = Math.min(1, (clientY - (viewportHeight - EDGE_ZONE)) / EDGE_ZONE);
+        autoScrollSpeed = Math.ceil(MAX_AUTOSCROLL_SPEED * depth);
+      } else {
+        autoScrollSpeed = 0;
+      }
+
+      if (autoScrollSpeed !== 0 && autoScrollRAF === null) {
+        const step = () => {
+          if (autoScrollSpeed === 0) {
+            autoScrollRAF = null;
+            return;
+          }
+          const next = Math.max(0, Math.min(maxScrollY(), window.scrollY + autoScrollSpeed));
+          window.scrollTo(0, next);
+          if (lastClientY !== null) updateDropTarget(lastClientY);
+          autoScrollRAF = requestAnimationFrame(step);
+        };
+        autoScrollRAF = requestAnimationFrame(step);
+      } else if (autoScrollSpeed === 0 && autoScrollRAF !== null) {
+        cancelAnimationFrame(autoScrollRAF);
+        autoScrollRAF = null;
+      }
+    }
+
+    function stopAutoScroll() {
+      autoScrollSpeed = 0;
+      if (autoScrollRAF) {
+        cancelAnimationFrame(autoScrollRAF);
+        autoScrollRAF = null;
+      }
+    }
+
     function onMove(ev) {
       if (ev.pointerId !== pointerId) return;
 
@@ -868,9 +1004,16 @@ function attachDragReorder(li, task) {
         // Task rows have touch-action:none (see CSS) so the browser never
         // starts its own scroll for a touch that began on one — we emulate
         // it ourselves once a pre-engage swipe turns out to be a scroll,
-        // rather than a deliberate long-press-then-drag.
-        window.scrollBy(0, lastY - ev.clientY);
+        // rather than a deliberate long-press-then-drag. Tracking velocity
+        // here is what lets the scroll keep gliding after release instead
+        // of just stopping — see startMomentumScroll.
+        const now = performance.now();
+        const dy = lastY - ev.clientY;
+        const dt = now - lastMoveTime;
+        window.scrollBy(0, dy);
+        if (dt > 0) scrollVelocity = dy / dt;
         lastY = ev.clientY;
+        lastMoveTime = now;
         return;
       }
 
@@ -884,6 +1027,7 @@ function attachDragReorder(li, task) {
           manualScrolling = true;
           window.scrollBy(0, lastY - ev.clientY);
           lastY = ev.clientY;
+          lastMoveTime = performance.now();
           return;
         } else {
           return;
@@ -891,22 +1035,14 @@ function attachDragReorder(li, task) {
       }
       ev.preventDefault();
 
-      const hovered = folderTargets.find((f) => ev.clientY >= f.rect.top && ev.clientY <= f.rect.bottom);
-      if (hovered) {
-        dropIndex = null;
-        dropFolderId = hovered.id;
-        removeDropLine(listEl);
-        setDropTargetFolder(listEl, hovered.id);
-        return;
-      }
-      dropFolderId = null;
-      clearDropTargetFolder(listEl);
-      dropIndex = dropIndexForY(siblingMidpoints, ev.clientY);
-      showDropLine(listEl, gapPositions[dropIndex]);
+      lastClientY = ev.clientY;
+      updateAutoScroll(ev.clientY);
+      updateDropTarget(ev.clientY);
     }
 
     function finish(shouldDrop) {
       clearTimeout(longPressTimer);
+      stopAutoScroll();
       if (engaged) {
         try { li.releasePointerCapture(pointerId); } catch { /* ignore */ }
         li.classList.remove("dragging");
@@ -918,6 +1054,8 @@ function attachDragReorder(li, task) {
           moveTaskTo(task.id, dropIndex);
         }
         suppressClickUntil = Date.now() + 300;
+      } else if (manualScrolling) {
+        startMomentumScroll(scrollVelocity);
       }
       cleanup();
     }

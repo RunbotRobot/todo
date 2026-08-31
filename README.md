@@ -24,7 +24,11 @@ be nothing yet to merge it with once your real list shows up.
 
 - **Tasks** — your sorted list. New tasks go to the top. Drag a task
   (click-drag on desktop, press-and-hold-then-drag on touch) to reorder;
-  a line shows where it'll land.
+  a line shows where it'll land. Dragging near the top or bottom of the
+  screen scrolls the page, so you can drag a task to a spot that isn't
+  currently on screen. A quick swipe on a task (too fast to count as a
+  press-and-hold) just scrolls normally, and keeps gliding briefly after
+  you lift your finger like a normal scroll would.
 - **Calendar** — tasks you're not ready to work on yet, grouped by the
   date you send them to. Once that date arrives, the app automatically
   moves them back to the top of Tasks.
