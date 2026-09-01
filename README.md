@@ -52,10 +52,16 @@ own visual formatting:
 There are no buttons on task rows — tap a task to select it (it
 highlights), then use the toolbar in the header to act on it: 👤 account
 (see below) · 🔍 search · ➕ add · ✅ complete · 🗑️ delete · ➡️ send to
-Calendar · ⬅️ send back to Tasks · ⏸️ pause (see below) · ✏️ edit · 🧟
-resurrect a completed or deleted task back to Tasks. Only the
-selection-based buttons relevant to the current tab are shown, and they're
-disabled until something is selected.
+Calendar · ⬅️ send back to Tasks · ⏸️ pause (see below) · 🟢 in progress
+(Tasks only — see below) · ✏️ edit · 🧟 resurrect a completed or deleted
+task back to Tasks. Only the selection-based buttons relevant to the
+current tab are shown, and they're disabled until something is selected.
+
+🟢 toggles a pale-green highlight on a task, for flagging which of several
+things you're currently juggling — distinct from ⏸️ Pause, which means
+"blocked on something" rather than "actively in progress". It only makes
+sense in the Tasks list, so it's cleared automatically if a task leaves
+Tasks (completed, deleted, sent to Calendar, or paused into a folder).
 
 ### Accounts
 

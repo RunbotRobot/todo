@@ -8,7 +8,7 @@ const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/fireb
 const FIREBASE_AUTH_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "22";
+const APP_VERSION = "23";
 
 /* ---------- config resolution ---------- */
 
@@ -65,6 +65,7 @@ const el = {
   tbDelete: document.getElementById("tb-delete"),
   tbSendCalendar: document.getElementById("tb-send-calendar"),
   tbPause: document.getElementById("tb-pause"),
+  tbInProgress: document.getElementById("tb-inprogress"),
   tbSendTasks: document.getElementById("tb-send-tasks"),
   tbEdit: document.getElementById("tb-edit"),
   tbResurrect: document.getElementById("tb-resurrect"),
@@ -259,6 +260,18 @@ function addTask(text) {
   saveState();
 }
 
+// A lightweight status flag for the Tasks list only (see the strip-on-exit
+// comments on completeTask/deleteTask/moveToCalendar/pauseTask/
+// addTaskToFolder) — just marks which of several things you're actively
+// juggling right now, distinct from Pause's "blocked on something" meaning.
+function toggleInProgress(id) {
+  const task = state.tasks.find((t) => t.id === id && t.type !== "folder");
+  if (!task) return;
+  task.inProgress = !task.inProgress;
+  render();
+  saveState();
+}
+
 function findAndRemove(listName, id) {
   const list = state[listName];
   const idx = list.findIndex((t) => t.id === id);
@@ -271,7 +284,10 @@ function findAndRemove(listName, id) {
 function completeTask(listName, id, nextDate) {
   const task = findAndRemove(listName, id);
   if (!task) return;
-  const { targetDate, sentAt, ...rest } = task;
+  // inProgress only means something in the Tasks list itself — strip it so
+  // a resurrected task doesn't silently come back flagged from whenever it
+  // left, without you having decided that.
+  const { targetDate, sentAt, inProgress, ...rest } = task;
   state.completed.unshift({ ...rest, completedAt: new Date().toISOString() });
   if (nextDate) {
     state.calendar.push({
@@ -289,7 +305,8 @@ function completeTask(listName, id, nextDate) {
 function deleteTask(listName, id) {
   const task = findAndRemove(listName, id);
   if (!task) return;
-  state.deleted.unshift({ ...task, deletedAt: new Date().toISOString(), sourceList: listName });
+  const { inProgress, ...rest } = task; // see completeTask's comment on why this is stripped
+  state.deleted.unshift({ ...rest, deletedAt: new Date().toISOString(), sourceList: listName });
   render();
   saveState();
 }
@@ -305,7 +322,8 @@ function permanentlyDeleteTask(id) {
 function moveToCalendar(id, targetDate) {
   const task = findAndRemove("tasks", id);
   if (!task) return;
-  state.calendar.push({ ...task, targetDate, sentAt: new Date().toISOString() });
+  const { inProgress, ...rest } = task; // see completeTask's comment on why this is stripped
+  state.calendar.push({ ...rest, targetDate, sentAt: new Date().toISOString() });
   render();
   saveState();
 }
@@ -352,8 +370,11 @@ function resurrectCompletedTask(id) {
 function pauseTask(id, blockerName) {
   const trimmed = blockerName.trim();
   if (!trimmed) return;
-  const task = findAndRemove("tasks", id);
-  if (!task) return;
+  const found = findAndRemove("tasks", id);
+  if (!found) return;
+  // A paused (blocked) task isn't work you're actively doing — see
+  // completeTask's comment on why inProgress gets stripped on the way out.
+  const { inProgress, ...task } = found;
   const existing = state.tasks.find(
     (t) => t.type === "folder" && t.blocker.toLowerCase() === trimmed.toLowerCase()
   );
@@ -418,8 +439,9 @@ function resumeTask(folderId, taskId) {
 function addTaskToFolder(taskId, folderId) {
   const folder = state.tasks.find((t) => t.id === folderId && t.type === "folder");
   if (!folder) return;
-  const task = findAndRemove("tasks", taskId);
-  if (!task) return;
+  const found = findAndRemove("tasks", taskId);
+  if (!found) return;
+  const { inProgress, ...task } = found; // see pauseTask's comment
   folder.tasks.unshift(task);
   render();
   saveState();
@@ -621,6 +643,7 @@ function buildTaskRow(listName, task, metaText) {
   li.className = "task-item selectable";
   li.dataset.taskId = task.id;
   if (isSelected(listName, task.id)) li.classList.add("selected");
+  if (task.inProgress) li.classList.add("in-progress");
 
   const textWrap = document.createElement("div");
   textWrap.className = "task-text";
@@ -1172,7 +1195,7 @@ function startEdit(listName, task, textNode) {
 /* ---------- toolbar ---------- */
 
 const TOOLBAR_ACTIONS_BY_TAB = {
-  tasks: ["complete", "delete", "send-calendar", "pause", "edit"],
+  tasks: ["complete", "delete", "send-calendar", "pause", "in-progress", "edit"],
   calendar: ["complete", "delete", "send-tasks", "edit"],
   completed: ["resurrect"],
   deleted: ["resurrect", "delete"],
@@ -1185,6 +1208,7 @@ function toolbarActionButtons() {
     "send-calendar": el.tbSendCalendar,
     "send-tasks": el.tbSendTasks,
     pause: el.tbPause,
+    "in-progress": el.tbInProgress,
     edit: el.tbEdit,
     resurrect: el.tbResurrect,
   };
@@ -1202,6 +1226,9 @@ function updateToolbar() {
     btn.classList.toggle("hidden", !isRelevant);
     btn.disabled = !isRelevant || !selected || (selectedIsFolder && action !== "edit");
   }
+  // Reflects the selected task's own state, the way Highlight's button does
+  // during editing — not just whether the action is available right now.
+  el.tbInProgress.classList.toggle("active", !!selectedTask && !!selectedTask.inProgress);
   const deleteLabel = currentTab === "deleted" ? "Delete Permanently" : "Delete";
   el.tbDelete.title = deleteLabel;
   el.tbDelete.setAttribute("aria-label", deleteLabel);
@@ -1545,6 +1572,11 @@ el.tbPause.addEventListener("click", () => {
   render();
 });
 
+el.tbInProgress.addEventListener("click", () => {
+  if (!selected) return;
+  toggleInProgress(selected.id);
+});
+
 el.tbSendTasks.addEventListener("click", () => {
   if (!selected) return;
   const { id } = selected;
@@ -1771,6 +1803,7 @@ function renderSearchResults() {
   for (const { listName, task, folder } of results) {
     const li = document.createElement("li");
     li.className = "task-item selectable";
+    if (task.inProgress) li.classList.add("in-progress");
     const textWrap = document.createElement("div");
     textWrap.className = "task-text";
     renderTaskTextInto(textWrap, task.text);

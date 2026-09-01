@@ -14,6 +14,10 @@
   --folder-border: #e3a3a3;
   --folder-bg-selected: #f0b8b8;
   --folder-border-selected: #c76b6b;
+  --inprogress-bg: #e3f5e1;
+  --inprogress-border: #a8d5a2;
+  --inprogress-bg-selected: #c8ecc3;
+  --inprogress-border-selected: #6fa868;
   --radius: 8px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
@@ -254,6 +258,15 @@ textarea {
   background: var(--selected-bg);
 }
 
+.task-item.in-progress {
+  background: var(--inprogress-bg);
+  border-color: var(--inprogress-border);
+}
+.task-item.in-progress.selected {
+  background: var(--inprogress-bg-selected);
+  border-color: var(--inprogress-border-selected);
+}
+
 .task-item.folder {
   background: var(--folder-bg);
   border-color: var(--folder-border);
@@ -380,6 +393,9 @@ textarea {
 }
 .icon-btn.linked {
   background: var(--accent-bg);
+}
+.icon-btn.active {
+  background: var(--inprogress-bg);
 }
 
 #tasks-list {
