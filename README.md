@@ -119,16 +119,17 @@ usual):
   `[[Every 3 days]]` (any number) → +n days
 - `[[Monthly]]` → same day next month (clamped if that day doesn't
   exist, e.g. Jan 31 → Feb 28) · `[[Yearly]]` → same date next year
-- `[[Start of Month]]` → the 1st of next month ·
-  `[[Start of Year]]` → next Jan 1
+- `[[Start of Month]]` (or `[[First Day of Month]]`) → the 1st of next
+  month · `[[Start of Year]]` (or `[[First Day of Year]]`) → next Jan 1
 - `[[Tuesdays]]` (any weekday name + "s") → the next occurrence of that
   weekday
 - `[[Recurring]]` → completing it prompts you to pick the next date
   yourself
 
 If the text inside `[[...]]` doesn't match one of these (a typo like
-`[[Evety 2 days]]`), Save is blocked and an error explains why — a task
-can't be left in a state where its recurrence marker is silently
+`[[Evety 2 days]]`), Save is blocked and an error explains why, listing
+the valid forms above so you don't have to come look them up here — a
+task can't be left in a state where its recurrence marker is silently
 ignored. Cancel always works regardless, since it discards the edit
 rather than saving it.
 

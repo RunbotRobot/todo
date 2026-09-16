@@ -8,7 +8,7 @@ const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/fireb
 const FIREBASE_AUTH_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "23";
+const APP_VERSION = "24";
 
 /* ---------- config resolution ---------- */
 
@@ -130,8 +130,8 @@ function parseRecurrence(text) {
   const raw = match[1].trim().toLowerCase();
   if (raw === "recurring") return "prompt";
   if (["daily", "weekly", "monthly", "yearly"].includes(raw)) return { type: raw };
-  if (raw === "start of month") return { type: "start-of-month" };
-  if (raw === "start of year") return { type: "start-of-year" };
+  if (raw === "start of month" || raw === "first day of month") return { type: "start-of-month" };
+  if (raw === "start of year" || raw === "first day of year") return { type: "start-of-year" };
   const weekdayMatch = raw.match(/^(sunday|monday|tuesday|wednesday|thursday|friday|saturday)s$/);
   if (weekdayMatch) return { type: "weekday", weekday: WEEKDAY_NAMES.indexOf(weekdayMatch[1]) };
   const everyNMatch = raw.match(/^every (\d+) days?$/);
@@ -152,6 +152,14 @@ function findUnrecognizedRecurrenceMarker(text) {
   if (!match) return null;
   return parseRecurrence(text) === null ? match[1].trim() : null;
 }
+
+// Shown alongside the "not recognized" error so fixing a typo (or just not
+// knowing the exact wording) doesn't mean hunting through the README.
+const RECURRENCE_HELP =
+  "Valid recurrences: [[Daily]], [[Weekly]], [[Monthly]], [[Yearly]], " +
+  "[[Every N days]], [[Start of Month]] (or [[First Day of Month]]), " +
+  "[[Start of Year]] (or [[First Day of Year]]), [[<Weekday>s]] " +
+  "(e.g. [[Tuesdays]]), [[Recurring]].";
 
 // Adds calendar months to a date, clamping the day into the target month
 // (e.g. Jan 31 + 1 month -> Feb 28) instead of letting it roll into the
@@ -1123,7 +1131,7 @@ function startEdit(listName, task, textNode) {
   const doSave = () => {
     const badMarker = findUnrecognizedRecurrenceMarker(textarea.value);
     if (badMarker) {
-      errorMsg.textContent = `"[[${badMarker}]]" isn't a recognized recurrence — fix or remove it to save.`;
+      errorMsg.textContent = `"[[${badMarker}]]" isn't a recognized recurrence — fix or remove it to save. ${RECURRENCE_HELP}`;
       errorMsg.classList.remove("hidden");
       return;
     }
@@ -1734,7 +1742,7 @@ function closeAddPanel() {
 function submitNewTask() {
   const badMarker = findUnrecognizedRecurrenceMarker(el.newTaskInput.value);
   if (badMarker) {
-    el.addTaskError.textContent = `"[[${badMarker}]]" isn't a recognized recurrence — fix or remove it to add.`;
+    el.addTaskError.textContent = `"[[${badMarker}]]" isn't a recognized recurrence — fix or remove it to add. ${RECURRENCE_HELP}`;
     el.addTaskError.classList.remove("hidden");
     return;
   }
