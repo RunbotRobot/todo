@@ -118,7 +118,8 @@ usual):
 - `[[Daily]]` → next day · `[[Weekly]]` → +7 days ·
   `[[Every 3 days]]` (any number) → +n days
 - `[[Monthly]]` → same day next month (clamped if that day doesn't
-  exist, e.g. Jan 31 → Feb 28) · `[[Yearly]]` → same date next year
+  exist, e.g. Jan 31 → Feb 28) · `[[Yearly]]` → same date next year ·
+  `[[Every 3 months]]` (any number) → +n months, same clamping as Monthly
 - `[[Start of Month]]` (or `[[First Day of Month]]`) → the 1st of next
   month · `[[Start of Year]]` (or `[[First Day of Year]]`) → next Jan 1
 - `[[Tuesdays]]` (any weekday name + "s") → the next occurrence of that

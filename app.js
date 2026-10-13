@@ -8,7 +8,7 @@ const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/fireb
 const FIREBASE_AUTH_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "24";
+const APP_VERSION = "25";
 
 /* ---------- config resolution ---------- */
 
@@ -139,6 +139,11 @@ function parseRecurrence(text) {
     const n = parseInt(everyNMatch[1], 10);
     if (n > 0) return { type: "every-n-days", n };
   }
+  const everyNMonthsMatch = raw.match(/^every (\d+) months?$/);
+  if (everyNMonthsMatch) {
+    const n = parseInt(everyNMonthsMatch[1], 10);
+    if (n > 0) return { type: "every-n-months", n };
+  }
   return null;
 }
 
@@ -157,9 +162,9 @@ function findUnrecognizedRecurrenceMarker(text) {
 // knowing the exact wording) doesn't mean hunting through the README.
 const RECURRENCE_HELP =
   "Valid recurrences: [[Daily]], [[Weekly]], [[Monthly]], [[Yearly]], " +
-  "[[Every N days]], [[Start of Month]] (or [[First Day of Month]]), " +
-  "[[Start of Year]] (or [[First Day of Year]]), [[<Weekday>s]] " +
-  "(e.g. [[Tuesdays]]), [[Recurring]].";
+  "[[Every N days]], [[Every N months]], [[Start of Month]] (or " +
+  "[[First Day of Month]]), [[Start of Year]] (or [[First Day of Year]]), " +
+  "[[<Weekday>s]] (e.g. [[Tuesdays]]), [[Recurring]].";
 
 // Adds calendar months to a date, clamping the day into the target month
 // (e.g. Jan 31 + 1 month -> Feb 28) instead of letting it roll into the
@@ -187,6 +192,9 @@ function computeNextDate(recurrence, fromYmd) {
       break;
     case "every-n-days":
       next = new Date(y, m - 1, d + recurrence.n);
+      break;
+    case "every-n-months":
+      next = addMonthsClamped(from, recurrence.n);
       break;
     case "monthly":
       next = addMonthsClamped(from, 1);
