@@ -348,14 +348,11 @@ function takeFrom(st, listName, id) {
   return idx === -1 ? null : list.splice(idx, 1)[0];
 }
 
-// Moves `moving` (already-identified task objects from st.tasks, in their
-// current relative order) to sit just before `beforeId`, failing that just
-// after `afterId`, failing that nowhere (the op is dropped: both anchors
-// have left the list, so the intended position no longer exists).
-function placeTasks(st, moving, beforeId, afterId) {
-  if (moving.length === 0) return;
-  const movingIds = new Set(moving.map((t) => t.id));
-  const others = st.tasks.filter((t) => !movingIds.has(t.id));
+// Moves `task` to sit just before `beforeId`, failing that just after
+// `afterId`, failing that nowhere (the op is dropped: both anchors have
+// left the list, so the intended position no longer exists).
+function placeTask(st, task, beforeId, afterId) {
+  const others = st.tasks.filter((t) => t.id !== task.id);
   let idx = -1;
   if (beforeId != null) idx = others.findIndex((t) => t.id === beforeId);
   if (idx === -1 && afterId != null) {
@@ -366,7 +363,7 @@ function placeTasks(st, moving, beforeId, afterId) {
     if (beforeId != null || afterId != null) return;
     idx = others.length;
   }
-  st.tasks = [...others.slice(0, idx), ...moving, ...others.slice(idx)];
+  st.tasks = [...others.slice(0, idx), task, ...others.slice(idx)];
 }
 
 // Pausing under a name that already exists as a folder (case-insensitively)
@@ -483,15 +480,7 @@ const OPS = {
 
   moveTask(st, { id, beforeId, afterId }) {
     const task = st.tasks.find((t) => t.id === id);
-    if (task) placeTasks(st, [task], beforeId, afterId);
-  },
-
-  // Dragging a folder row moves ALL its members, as one block in their
-  // current order — the only way a folder's position can change directly,
-  // since it otherwise just follows its top member.
-  moveFolder(st, { key, beforeId, afterId }) {
-    const members = st.tasks.filter((t) => folderKey(t.blocker) === key);
-    placeTasks(st, members, beforeId, afterId);
+    if (task) placeTask(st, task, beforeId, afterId);
   },
 
   editTaskText(st, { listName, id, text }) {
@@ -732,16 +721,13 @@ function addTaskToFolder(taskId, folderId) {
 // dropIndexForY. Translated into flat-list anchors (the row it should land
 // before, and the one it should land after, as fallback) so the op still
 // means the same thing if the list has changed by the time it's committed.
-// Dragging a folder row moves all of its members as a block.
+// Only task rows get here: folder rows aren't draggable (see attachDragReorder).
 function moveEntryTo(entry, insertIndex) {
+  if (entry.type === "folder") return;
   const others = displayTasks().filter((t) => t.id !== entry.id);
   const beforeId = anchorIdOf(others[insertIndex]);
   const afterId = anchorIdOf(others[insertIndex - 1]);
-  if (entry.type === "folder") {
-    commit("moveFolder", { key: folderKey(entry.blocker), beforeId, afterId });
-  } else {
-    commit("moveTask", { id: entry.id, beforeId, afterId });
-  }
+  commit("moveTask", { id: entry.id, beforeId, afterId });
 }
 
 function editTaskText(listName, id, newText) {
@@ -1206,7 +1192,14 @@ function startMomentumScroll(pxPerMs) {
   momentumRAF = requestAnimationFrame(step);
 }
 
+// A folder row can't be dragged: its position is defined as its top
+// member's position, so moving it directly would have to rewrite its
+// members' priorities, which is exactly what the folder isn't meant to do.
+// Re-rank the task inside it instead (resume, drag, pause again). The
+// handler still attaches to folder rows so a touch that starts on one
+// scrolls the page like any other row (task rows have touch-action: none).
 function attachDragReorder(li, task) {
+  const canDrag = task.type !== "folder";
   li.addEventListener("pointerdown", (e) => {
     if (e.target.closest("button, input, textarea")) return;
     if (e.pointerType === "mouse" && e.button !== 0) return;
@@ -1327,7 +1320,9 @@ function attachDragReorder(li, task) {
 
       const dy = ev.clientY - startY;
       if (!engaged) {
-        if (!isTouch && Math.abs(dy) > 4) {
+        if (!isTouch && !canDrag) {
+          return;
+        } else if (!isTouch && Math.abs(dy) > 4) {
           engage();
         } else if (isTouch && Math.abs(dy) > 10) {
           // Moved before the long-press fired — treat as a normal scroll.
@@ -1388,7 +1383,7 @@ function attachDragReorder(li, task) {
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onCancel);
 
-    if (isTouch) {
+    if (isTouch && canDrag) {
       longPressTimer = setTimeout(engage, 400);
     }
   });

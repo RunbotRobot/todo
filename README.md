@@ -107,8 +107,8 @@ and it moves on its own whenever that changes: resume the top task and
 the folder drops to where the next one ranks; put a higher-ranked task
 into it and the folder jumps up to meet it. So to re-rank something
 that's paused, resume it, drag it to where it belongs, and pause it
-again — the folder follows. Dragging the folder row itself moves
-everything in it together, as one block, to the spot you drop it.
+again — the folder follows. A folder row itself can't be dragged, since
+its position isn't its own to set.
 
 ### Search
 
