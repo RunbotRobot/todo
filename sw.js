@@ -1,7 +1,7 @@
 // Bump this alongside APP_VERSION in app.js whenever a change ships — it's
 // what forces the cached app shell to refresh instead of serving a stale
 // version indefinitely.
-const CACHE_VERSION = "v14";
+const CACHE_VERSION = "v15";
 const CACHE_NAME = `todo-shell-${CACHE_VERSION}`;
 
 // Same-origin app shell, plus the three pinned-version Firebase SDK files —
