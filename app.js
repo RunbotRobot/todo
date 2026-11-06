@@ -8,7 +8,7 @@ const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/fireb
 const FIREBASE_AUTH_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "25";
+const APP_VERSION = "26";
 
 /* ---------- config resolution ---------- */
 
@@ -37,7 +37,7 @@ function resolveConfig() {
 let state = { tasks: [], calendar: [], completed: [], deleted: [] };
 let db = null;
 let docRef = null;
-let fb = null; // holds { setDoc, onSnapshot, runTransaction, doc } once the SDK loads
+let fb = null; // holds { onSnapshot, runTransaction, doc } once the SDK loads
 let auth = null;
 let authMod = null; // the firebase-auth module itself, once loaded
 let authUser = null; // current signed-in user (anonymous or Google-linked)
@@ -220,19 +220,400 @@ function computeNextDate(recurrence, fromYmd) {
   return next.toLocaleDateString("en-CA");
 }
 
-/* ---------- persistence ---------- */
+/* ---------- data model: one flat, prioritised list ---------- */
 
-async function saveState() {
-  // Guards against a real hazard, not just a cosmetic one: setDoc overwrites
-  // the whole document, so saving before the first snapshot has told us
-  // what's actually there (e.g. a task added in the instant the app opens)
-  // would wipe out everything else in it.
-  if (!docRef || !fb || !dataLoaded) return;
+// state.tasks is a single flat array in priority order — index 0 is the
+// most important thing on the list, full stop. A paused task stays in that
+// array at its own priority and just carries a `blocker` string naming the
+// folder it's paused under; folders themselves are never stored. They're
+// derived at render time (displayTasks): a folder appears at the position
+// of its highest-priority member and lists its members in priority order.
+// That's what makes "the folder jumps to wherever its most important task
+// is" happen by construction — take a task out, move it, put it back, and
+// the folder follows — and it means anything outside the app that wants to
+// reprioritise (a nightly script, say) only ever has to sort one list.
+//
+// Older documents stored folders inline as { type: "folder", blocker,
+// tasks: [...] }. normalizeTasks flattens those on the way in — each member
+// gets the folder's blocker and takes the folder's slot — and every write
+// goes out flat, so a document migrates itself the first time it's saved.
+function folderKey(blocker) {
+  return String(blocker || "").trim().toLowerCase();
+}
+
+function folderIdFor(blocker) {
+  return `folder:${folderKey(blocker)}`;
+}
+
+function normalizeTasks(list) {
+  const out = [];
+  for (const entry of Array.isArray(list) ? list : []) {
+    if (!entry || typeof entry !== "object") continue;
+    if (entry.type === "folder") {
+      for (const child of Array.isArray(entry.tasks) ? entry.tasks : []) {
+        if (!child || typeof child !== "object") continue;
+        const { type, tasks, ...rest } = child; // a folder can't nest another
+        out.push({ ...rest, blocker: entry.blocker });
+      }
+      continue;
+    }
+    out.push(entry);
+  }
+  return out;
+}
+
+function normalizeState(data) {
+  return {
+    tasks: normalizeTasks(data?.tasks),
+    calendar: Array.isArray(data?.calendar) ? data.calendar : [],
+    completed: Array.isArray(data?.completed) ? data.completed : [],
+    deleted: Array.isArray(data?.deleted) ? data.deleted : [],
+  };
+}
+
+// What the Tasks tab actually shows: the flat list, with each folder's
+// members gathered under one synthetic { type: "folder" } entry that sits
+// where the first (highest-priority) of them is. The synthetic entry's id
+// is derived from the folder's name, so it's stable across renders and
+// devices and can be what `selected` points at.
+function displayTasks(tasks = state.tasks) {
+  const out = [];
+  const folders = new Map();
+  for (const task of tasks) {
+    const key = folderKey(task.blocker);
+    if (!key) {
+      out.push(task);
+      continue;
+    }
+    let folder = folders.get(key);
+    if (!folder) {
+      folder = { type: "folder", id: folderIdFor(task.blocker), blocker: String(task.blocker).trim(), tasks: [] };
+      folders.set(key, folder);
+      out.push(folder);
+    }
+    folder.tasks.push(task);
+  }
+  return out;
+}
+
+// Looks an id up the way the UI sees it — in Tasks a folder id resolves to
+// its synthetic entry and a task id to the task, folded or not.
+function findEntry(listName, id) {
+  if (listName === "tasks") return displayTasks().find((t) => t.id === id) || null;
+  return state[listName]?.find((t) => t.id === id) || null;
+}
+
+// The flat-list id that "before/after this row" means. For a folder row
+// that's its top member, since that member's slot is the folder's slot.
+function anchorIdOf(entry) {
+  if (!entry) return null;
+  return entry.type === "folder" ? (entry.tasks[0]?.id ?? null) : entry.id;
+}
+
+/* ---------- persistence: an action log replayed inside a transaction ---------- */
+
+// Why not just setDoc(state)? Because that overwrites the WHOLE document
+// with whatever this tab last saw, and this tab is not the only writer:
+// another device, an offline tab that just reconnected, or a script
+// reprioritising the list overnight may all have changed the document since
+// this tab last heard from it. A stale whole-document save silently undoes
+// every one of those changes (this really happened: a phone that had sat in
+// the background saved its old list straight over a fresh reorder).
+//
+// So instead every user action is recorded as a small replayable op
+// ({ type, args } — see OPS), applied to local state immediately so the UI
+// responds at once, and persisted by a Firestore transaction that reads the
+// document as it is NOW, replays the queued ops onto that, and writes the
+// result. Firestore re-runs the transaction if the document changes under
+// it, so two writers' changes interleave instead of clobbering each other.
+//
+// Ops are written to be idempotent and to cope with a changed world (the
+// task is gone, the anchor it was dropped next to has moved) by doing the
+// sensible thing or nothing. That's also what lets the pending queue be
+// re-applied on top of every incoming snapshot — so the list never flickers
+// back to its pre-action state while a write is in flight — and what makes
+// it safe to replay a queue that was persisted across a reload or an
+// offline stretch. Ids and timestamps are generated by the caller and
+// passed in as args, so a replay produces exactly the same result.
+let pendingOps = []; // applied locally, not yet committed; oldest first
+let queueStorageKey = null; // per-account localStorage key holding pendingOps
+let flushing = false;
+let flushRetryTimer = null;
+let flushRetryDelayMs = 2000;
+
+function takeFrom(st, listName, id) {
+  const list = st[listName];
+  if (!Array.isArray(list)) return null;
+  const idx = list.findIndex((t) => t.id === id);
+  return idx === -1 ? null : list.splice(idx, 1)[0];
+}
+
+// Moves `moving` (already-identified task objects from st.tasks, in their
+// current relative order) to sit just before `beforeId`, failing that just
+// after `afterId`, failing that nowhere (the op is dropped: both anchors
+// have left the list, so the intended position no longer exists).
+function placeTasks(st, moving, beforeId, afterId) {
+  if (moving.length === 0) return;
+  const movingIds = new Set(moving.map((t) => t.id));
+  const others = st.tasks.filter((t) => !movingIds.has(t.id));
+  let idx = -1;
+  if (beforeId != null) idx = others.findIndex((t) => t.id === beforeId);
+  if (idx === -1 && afterId != null) {
+    const after = others.findIndex((t) => t.id === afterId);
+    if (after !== -1) idx = after + 1;
+  }
+  if (idx === -1) {
+    if (beforeId != null || afterId != null) return;
+    idx = others.length;
+  }
+  st.tasks = [...others.slice(0, idx), ...moving, ...others.slice(idx)];
+}
+
+// Pausing under a name that already exists as a folder (case-insensitively)
+// joins that folder, keeping its existing spelling — so "home" and "Home"
+// never become two folders.
+function canonicalBlocker(st, blocker) {
+  const key = folderKey(blocker);
+  const existing = st.tasks.find((t) => folderKey(t.blocker) === key);
+  return existing ? String(existing.blocker).trim() : String(blocker).trim();
+}
+
+const OPS = {
+  addTask(st, { id, text, createdAt }) {
+    if (st.tasks.some((t) => t.id === id)) return;
+    st.tasks.unshift({ id, text, createdAt });
+  },
+
+  setInProgress(st, { id, value }) {
+    const task = st.tasks.find((t) => t.id === id);
+    if (task) task.inProgress = !!value;
+  },
+
+  // nextDate/nextId, when given, also spin off a fresh copy of the task
+  // into Calendar for that date — used for recurring tasks. Only when the
+  // task was actually here to complete: a replay (or the same completion
+  // arriving from another device) must not create the spin-off twice.
+  completeTask(st, { listName, id, at, nextId, nextDate }) {
+    const task = takeFrom(st, listName, id);
+    if (!task) return;
+    // inProgress and blocker only mean something inside the Tasks list —
+    // strip them so a resurrected task doesn't silently come back flagged
+    // or paused from whenever it left, without you having decided that.
+    const { targetDate, sentAt, inProgress, blocker, ...rest } = task;
+    st.completed.unshift({ ...rest, completedAt: at });
+    if (nextDate && nextId && !st.calendar.some((t) => t.id === nextId)) {
+      st.calendar.push({ id: nextId, text: task.text, createdAt: at, targetDate: nextDate, sentAt: at });
+    }
+  },
+
+  deleteTask(st, { listName, id, at }) {
+    const task = takeFrom(st, listName, id);
+    if (!task) return;
+    const { inProgress, blocker, ...rest } = task; // see completeTask
+    st.deleted.unshift({ ...rest, deletedAt: at, sourceList: listName });
+  },
+
+  permanentlyDeleteTask(st, { id }) {
+    takeFrom(st, "deleted", id);
+  },
+
+  moveToCalendar(st, { id, targetDate, at }) {
+    const task = takeFrom(st, "tasks", id);
+    if (!task) return;
+    const { inProgress, blocker, ...rest } = task; // see completeTask
+    st.calendar.push({ ...rest, targetDate, sentAt: at });
+  },
+
+  moveToTasks(st, { id }) {
+    const task = takeFrom(st, "calendar", id);
+    if (!task) return;
+    const { targetDate, sentAt, ...rest } = task;
+    st.tasks.unshift(rest);
+  },
+
+  restoreFromDeleted(st, { id }) {
+    const task = takeFrom(st, "deleted", id);
+    if (!task) return;
+    const { deletedAt, sourceList, ...rest } = task;
+    if (sourceList === "calendar" && rest.targetDate) {
+      st.calendar.push(rest);
+    } else {
+      const { targetDate, sentAt, ...clean } = rest;
+      st.tasks.unshift(clean);
+    }
+  },
+
+  // Unlike restoreFromDeleted, this always goes to the top of Tasks — a
+  // completed task doesn't carry a Calendar date to return to.
+  resurrectCompletedTask(st, { id }) {
+    const task = takeFrom(st, "completed", id);
+    if (!task) return;
+    const { completedAt, ...rest } = task;
+    st.tasks.unshift(rest);
+  },
+
+  // The task keeps its priority slot; only its folder membership changes.
+  // A paused (blocked) task isn't work you're actively doing, so the
+  // in-progress flag comes off on the way in.
+  pauseTask(st, { id, blocker }) {
+    const task = st.tasks.find((t) => t.id === id);
+    if (!task || !folderKey(blocker)) return;
+    task.blocker = canonicalBlocker(st, blocker);
+    delete task.inProgress;
+  },
+
+  // Back out of its folder, keeping its priority slot — so it reappears
+  // exactly where it ranked, not at the top. (Move it from there if that's
+  // not where it belongs any more.)
+  resumeTask(st, { id }) {
+    const task = st.tasks.find((t) => t.id === id);
+    if (task) delete task.blocker;
+  },
+
+  // Renaming to a name another folder already has merges the two, the same
+  // way pausing under an existing name joins that folder.
+  renameFolder(st, { key, blocker }) {
+    const name = String(blocker).trim();
+    if (!key || !name) return;
+    const target = canonicalBlocker(st, name);
+    for (const task of st.tasks) {
+      if (folderKey(task.blocker) === key) task.blocker = target;
+    }
+  },
+
+  moveTask(st, { id, beforeId, afterId }) {
+    const task = st.tasks.find((t) => t.id === id);
+    if (task) placeTasks(st, [task], beforeId, afterId);
+  },
+
+  // Dragging a folder row moves ALL its members, as one block in their
+  // current order — the only way a folder's position can change directly,
+  // since it otherwise just follows its top member.
+  moveFolder(st, { key, beforeId, afterId }) {
+    const members = st.tasks.filter((t) => folderKey(t.blocker) === key);
+    placeTasks(st, members, beforeId, afterId);
+  },
+
+  editTaskText(st, { listName, id, text }) {
+    const task = st[listName]?.find((t) => t.id === id);
+    if (task) task.text = text;
+  },
+
+  // Restoring a backup really does mean "replace everything" — the one op
+  // that's deliberately a whole-document write.
+  replaceState(st, { tasks, calendar, completed, deleted }) {
+    st.tasks = normalizeTasks(tasks);
+    st.calendar = calendar;
+    st.completed = completed;
+    st.deleted = deleted;
+  },
+
+  // Calendar items whose date has arrived move back to the top of Tasks.
+  promoteDue(st, { today }) {
+    const due = st.calendar.filter((t) => t.targetDate <= today);
+    if (due.length === 0) return;
+    st.calendar = st.calendar.filter((t) => t.targetDate > today);
+    const promoted = due.map(({ targetDate, sentAt, ...rest }) => rest);
+    st.tasks.unshift(...promoted.reverse());
+  },
+};
+
+function applyOp(st, op) {
+  const fn = OPS[op?.type];
+  if (fn) fn(st, op.args || {});
+}
+
+function withPendingOps(base) {
+  if (pendingOps.length === 0) return base;
+  const st = JSON.parse(JSON.stringify(base));
+  for (const op of pendingOps) applyOp(st, op);
+  return st;
+}
+
+function persistQueue() {
+  if (!queueStorageKey) return;
   try {
-    await fb.setDoc(docRef, state);
+    if (pendingOps.length === 0) localStorage.removeItem(queueStorageKey);
+    else localStorage.setItem(queueStorageKey, JSON.stringify(pendingOps));
+  } catch (err) {
+    console.warn("Couldn't persist pending changes", err);
+  }
+}
+
+function loadQueue(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((op) => op && OPS[op.type]) : [];
+  } catch {
+    return [];
+  }
+}
+
+// The one entry point every mutation goes through: apply locally, queue,
+// persist the queue, repaint, and start (or keep) flushing.
+function commit(type, args) {
+  // Acting before the first snapshot has arrived would be acting on an
+  // empty list that isn't really the list — the UI keeps that from
+  // happening (tbAdd is disabled, nothing is selectable), this is the
+  // backstop.
+  if (!dataLoaded) return;
+  const op = { type, args };
+  applyOp(state, op);
+  pendingOps.push(op);
+  persistQueue();
+  render();
+  flushOps();
+}
+
+function scheduleFlushRetry() {
+  clearTimeout(flushRetryTimer);
+  flushRetryTimer = setTimeout(() => {
+    flushRetryTimer = null;
+    flushOps();
+  }, flushRetryDelayMs);
+  flushRetryDelayMs = Math.min(flushRetryDelayMs * 2, 60 * 1000);
+}
+
+async function flushOps() {
+  if (flushing || !docRef || !db || !fb || !dataLoaded || pendingOps.length === 0) return;
+  flushing = true;
+  clearTimeout(flushRetryTimer);
+  flushRetryTimer = null;
+  const queue = pendingOps; // the array this flush drains — attachUserDoc may swap in another
+  const batch = queue.slice();
+  const ref = docRef;
+  try {
+    await fb.runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      const data = snap.exists() ? snap.data() : {};
+      const st = normalizeState(data);
+      for (const op of batch) applyOp(st, op);
+      // Spread `data` first so fields this app doesn't know about (left by
+      // other tools) survive the write. rev/updatedAt are bookkeeping for
+      // those tools, nothing here reads them.
+      tx.set(ref, {
+        ...data,
+        ...st,
+        rev: (Number(data.rev) || 0) + 1,
+        updatedAt: new Date().toISOString(),
+      });
+    });
+    queue.splice(0, batch.length); // ops added while in flight stay queued
+    if (queue === pendingOps) persistQueue();
+    flushRetryDelayMs = 2000;
+    if (pendingOps.length === 0 && navigator.onLine !== false) setSyncStatus("");
   } catch (err) {
     console.error("Save failed", err);
-    setSyncStatus("Save failed — will retry on next change", true);
+    // Offline is reported by the snapshot listener already; only shout
+    // when a save fails while apparently connected.
+    if (navigator.onLine !== false) setSyncStatus("Save failed — retrying…", true);
+    scheduleFlushRetry();
+  } finally {
+    flushing = false;
+    // Anything queued while this flush was in flight goes out right away;
+    // after a failure the retry timer owns the next attempt instead.
+    if (pendingOps.length > 0 && !flushRetryTimer) flushOps();
   }
 }
 
@@ -243,244 +624,128 @@ function setSyncStatus(msg, isError = false) {
 
 /* ---------- due-date promotion ---------- */
 
-async function promoteDueTasksIfNeeded() {
-  if (!docRef || !fb) return;
+// Runs on every snapshot and once a minute. Goes through the same op queue
+// as everything else, so it's replayed onto the live document rather than
+// racing it — and only gets queued when there's actually something due,
+// so an idle app queues nothing.
+function promoteDueTasksIfNeeded() {
+  if (!dataLoaded) return;
   const today = todayLocal();
-  try {
-    await fb.runTransaction(db, async (tx) => {
-      const snap = await tx.get(docRef);
-      if (!snap.exists()) return;
-      const data = snap.data();
-      const calendar = data.calendar || [];
-      const due = calendar.filter((t) => t.targetDate <= today);
-      if (due.length === 0) return;
-      const remaining = calendar.filter((t) => t.targetDate > today);
-      const promoted = due.map((t) => {
-        const { targetDate, sentAt, ...rest } = t;
-        return rest;
-      });
-      const newTasks = [...promoted.reverse(), ...(data.tasks || [])];
-      tx.set(docRef, { ...data, tasks: newTasks, calendar: remaining });
-    });
-  } catch (err) {
-    console.error("Promotion check failed", err);
-  }
+  if (!state.calendar.some((t) => t.targetDate <= today)) return;
+  commit("promoteDue", { today });
 }
 
 /* ---------- mutations ---------- */
 
+// Each of these is a thin wrapper: generate any ids/timestamps here (so a
+// replay is deterministic — see the persistence comment) and hand off to
+// commit(). The data changes themselves live in OPS above.
+
 function addTask(text) {
   if (!text.trim()) return;
-  state.tasks.unshift({ id: uuid(), text, createdAt: new Date().toISOString() });
-  render();
-  saveState();
+  commit("addTask", { id: uuid(), text, createdAt: new Date().toISOString() });
 }
 
-// A lightweight status flag for the Tasks list only (see the strip-on-exit
-// comments on completeTask/deleteTask/moveToCalendar/pauseTask/
-// addTaskToFolder) — just marks which of several things you're actively
-// juggling right now, distinct from Pause's "blocked on something" meaning.
+// A lightweight status flag for the Tasks list only — just marks which of
+// several things you're actively juggling right now, distinct from Pause's
+// "blocked on something" meaning. Stripped whenever a task leaves Tasks.
 function toggleInProgress(id) {
-  const task = state.tasks.find((t) => t.id === id && t.type !== "folder");
-  if (!task) return;
-  task.inProgress = !task.inProgress;
-  render();
-  saveState();
-}
-
-function findAndRemove(listName, id) {
-  const list = state[listName];
-  const idx = list.findIndex((t) => t.id === id);
-  if (idx === -1) return null;
-  return list.splice(idx, 1)[0];
+  const task = findEntry("tasks", id);
+  if (!task || task.type === "folder") return;
+  commit("setInProgress", { id, value: !task.inProgress });
 }
 
 // nextDate (YYYY-MM-DD), when given, also spins off a fresh copy of the
 // task into Calendar for that date — used for recurring tasks.
 function completeTask(listName, id, nextDate) {
-  const task = findAndRemove(listName, id);
-  if (!task) return;
-  // inProgress only means something in the Tasks list itself — strip it so
-  // a resurrected task doesn't silently come back flagged from whenever it
-  // left, without you having decided that.
-  const { targetDate, sentAt, inProgress, ...rest } = task;
-  state.completed.unshift({ ...rest, completedAt: new Date().toISOString() });
-  if (nextDate) {
-    state.calendar.push({
-      id: uuid(),
-      text: task.text,
-      createdAt: new Date().toISOString(),
-      targetDate: nextDate,
-      sentAt: new Date().toISOString(),
-    });
-  }
-  render();
-  saveState();
+  const at = new Date().toISOString();
+  commit("completeTask", { listName, id, at, nextDate: nextDate || null, nextId: nextDate ? uuid() : null });
 }
 
 function deleteTask(listName, id) {
-  const task = findAndRemove(listName, id);
-  if (!task) return;
-  const { inProgress, ...rest } = task; // see completeTask's comment on why this is stripped
-  state.deleted.unshift({ ...rest, deletedAt: new Date().toISOString(), sourceList: listName });
-  render();
-  saveState();
+  commit("deleteTask", { listName, id, at: new Date().toISOString() });
 }
 
 // Deleting a task that's already in Deleted removes it for good, rather
 // than looping it back into Deleted with a new timestamp.
 function permanentlyDeleteTask(id) {
-  if (!findAndRemove("deleted", id)) return;
-  render();
-  saveState();
+  commit("permanentlyDeleteTask", { id });
 }
 
 function moveToCalendar(id, targetDate) {
-  const task = findAndRemove("tasks", id);
-  if (!task) return;
-  const { inProgress, ...rest } = task; // see completeTask's comment on why this is stripped
-  state.calendar.push({ ...rest, targetDate, sentAt: new Date().toISOString() });
-  render();
-  saveState();
+  commit("moveToCalendar", { id, targetDate, at: new Date().toISOString() });
 }
 
 function moveToTasks(id) {
-  const task = findAndRemove("calendar", id);
-  if (!task) return;
-  const { targetDate, sentAt, ...rest } = task;
-  state.tasks.unshift(rest);
-  render();
-  saveState();
+  commit("moveToTasks", { id });
 }
 
 function restoreFromDeleted(id) {
-  const task = findAndRemove("deleted", id);
-  if (!task) return;
-  const { deletedAt, sourceList, ...rest } = task;
-  if (sourceList === "calendar" && rest.targetDate) {
-    state.calendar.push(rest);
-  } else {
-    const { targetDate, sentAt, ...clean } = rest;
-    state.tasks.unshift(clean);
-  }
-  render();
-  saveState();
+  commit("restoreFromDeleted", { id });
 }
 
-// Unlike restoreFromDeleted, this always goes to the top of Tasks — a
-// completed task doesn't carry a Calendar date to return to.
 function resurrectCompletedTask(id) {
-  const task = findAndRemove("completed", id);
-  if (!task) return;
-  const { completedAt, ...rest } = task;
-  state.tasks.unshift(rest);
-  render();
-  saveState();
+  commit("resurrectCompletedTask", { id });
 }
 
-// Folders are just another kind of entry in state.tasks — { type: "folder",
-// blocker, tasks: [...] } — so they sit inline with regular tasks, sync the
-// same way, and don't need a whole new top-level list. Pausing removes the
-// task from Tasks and either joins an existing folder for that blocker
-// (case-insensitive match) or creates a new one.
+// Pausing tags the task with the blocker it's waiting on; it stays at its
+// own priority and shows up inside that folder (which appears at the slot
+// of its top member — see displayTasks). Joins an existing folder of that
+// name, case-insensitively, or starts a new one.
 function pauseTask(id, blockerName) {
   const trimmed = blockerName.trim();
   if (!trimmed) return;
-  const found = findAndRemove("tasks", id);
-  if (!found) return;
-  // A paused (blocked) task isn't work you're actively doing — see
-  // completeTask's comment on why inProgress gets stripped on the way out.
-  const { inProgress, ...task } = found;
-  const existing = state.tasks.find(
-    (t) => t.type === "folder" && t.blocker.toLowerCase() === trimmed.toLowerCase()
-  );
-  if (existing) {
-    existing.tasks.unshift(task);
-  } else {
-    state.tasks.unshift({
-      id: uuid(),
-      type: "folder",
-      blocker: trimmed,
-      createdAt: new Date().toISOString(),
-      tasks: [task],
-    });
-  }
-  render();
-  saveState();
+  commit("pauseTask", { id, blocker: trimmed });
 }
 
 // Renames a blocker folder. If another folder already has that name
-// (case-insensitively), merges this folder's tasks into it and removes this
-// one instead — mirrors how pausing a second task with the same blocker
-// joins the existing folder rather than making a duplicate.
+// (case-insensitively), the two merge — mirrors how pausing a second task
+// with the same blocker joins the existing folder rather than making a
+// duplicate. Either way the renamed/merged folder stays selected.
 function renameFolder(folderId, newBlocker) {
   const trimmed = newBlocker.trim();
   if (!trimmed) return;
-  const folder = state.tasks.find((t) => t.id === folderId && t.type === "folder");
-  if (!folder) return;
-  const other = state.tasks.find(
-    (t) => t.type === "folder" && t.id !== folderId && t.blocker.toLowerCase() === trimmed.toLowerCase()
-  );
-  if (other) {
-    other.tasks.unshift(...folder.tasks);
-    findAndRemove("tasks", folderId);
-    selected = { listName: "tasks", id: other.id }; // the merged-away id no longer exists
-  } else {
-    folder.blocker = trimmed;
-    selected = { listName: "tasks", id: folderId };
-  }
-  render();
-  saveState();
+  const folder = findEntry("tasks", folderId);
+  if (!folder || folder.type !== "folder") return;
+  selected = { listName: "tasks", id: folderIdFor(trimmed) };
+  commit("renameFolder", { key: folderKey(folder.blocker), blocker: trimmed });
 }
 
-// Moves a task back out of its folder to the top of Tasks. Removes the
-// folder itself once it's empty.
-function resumeTask(folderId, taskId) {
-  const folder = state.tasks.find((t) => t.id === folderId && t.type === "folder");
-  if (!folder) return;
-  const idx = folder.tasks.findIndex((t) => t.id === taskId);
-  if (idx === -1) return;
-  const [task] = folder.tasks.splice(idx, 1);
-  state.tasks.unshift(task);
-  if (folder.tasks.length === 0) {
-    findAndRemove("tasks", folderId);
-    if (selected && selected.id === folderId) selected = null;
-  }
-  render();
-  saveState();
+// Moves a task back out of its folder. It keeps its priority slot — so it
+// reappears where it ranked, not at the top. An emptied folder disappears
+// on its own (nothing is left to derive it from); render() drops a
+// selection that no longer resolves.
+function resumeTask(taskId) {
+  commit("resumeTask", { id: taskId });
 }
 
 // Used by dragging a task straight onto a folder — same destination as
 // pauseTask, but the folder is already known, so no name-matching needed.
 function addTaskToFolder(taskId, folderId) {
-  const folder = state.tasks.find((t) => t.id === folderId && t.type === "folder");
-  if (!folder) return;
-  const found = findAndRemove("tasks", taskId);
-  if (!found) return;
-  const { inProgress, ...task } = found; // see pauseTask's comment
-  folder.tasks.unshift(task);
-  render();
-  saveState();
+  const folder = findEntry("tasks", folderId);
+  if (!folder || folder.type !== "folder") return;
+  commit("pauseTask", { id: taskId, blocker: folder.blocker });
 }
 
-// insertIndex is the target position counted among the OTHER tasks (i.e.
-// the list with the dragged task already removed) — see computeDropIndex.
-function moveTaskTo(id, insertIndex) {
-  const fromIndex = state.tasks.findIndex((t) => t.id === id);
-  if (fromIndex === -1 || fromIndex === insertIndex) return;
-  const [task] = state.tasks.splice(fromIndex, 1);
-  const clamped = Math.max(0, Math.min(insertIndex, state.tasks.length));
-  state.tasks.splice(clamped, 0, task);
-  render();
-  saveState();
+// insertIndex is the target position counted among the OTHER display rows
+// (i.e. the Tasks tab with the dragged row already removed) — see
+// dropIndexForY. Translated into flat-list anchors (the row it should land
+// before, and the one it should land after, as fallback) so the op still
+// means the same thing if the list has changed by the time it's committed.
+// Dragging a folder row moves all of its members as a block.
+function moveEntryTo(entry, insertIndex) {
+  const others = displayTasks().filter((t) => t.id !== entry.id);
+  const beforeId = anchorIdOf(others[insertIndex]);
+  const afterId = anchorIdOf(others[insertIndex - 1]);
+  if (entry.type === "folder") {
+    commit("moveFolder", { key: folderKey(entry.blocker), beforeId, afterId });
+  } else {
+    commit("moveTask", { id: entry.id, beforeId, afterId });
+  }
 }
 
 function editTaskText(listName, id, newText) {
-  const task = state[listName].find((t) => t.id === id);
-  if (!task) return;
-  task.text = newText;
-  render();
-  saveState();
+  commit("editTaskText", { listName, id, text: newText });
 }
 
 /* ---------- smart textarea: Tab and ">" indentation ---------- */
@@ -617,6 +882,10 @@ function buildHighlightView(container, text, onLineClick) {
 /* ---------- rendering ---------- */
 
 function render() {
+  // A selection can stop resolving under us — the folder it pointed at
+  // emptied and vanished, or another device completed the task. Clear it
+  // rather than leave the toolbar armed for something that isn't there.
+  if (selected && !findEntry(selected.listName, selected.id)) selected = null;
   renderTasks();
   renderCalendar();
   renderCompleted();
@@ -624,7 +893,7 @@ function render() {
   updateToolbar();
   el.tbAccount.classList.toggle("linked", !!authUser && !authUser.isAnonymous);
   // Adding a task before the first snapshot arrives would have nothing to
-  // merge with once it does — saveState() already refuses to save in that
+  // merge with once it does — commit() already refuses to act in that
   // window (see its comment), so disable the entry point too rather than
   // let someone type a task that then silently fails to persist.
   el.tbAdd.disabled = !dataLoaded;
@@ -778,7 +1047,7 @@ function buildFolderRow(folder) {
       const childText = document.createElement("div");
       childText.className = "task-text";
       renderTaskTextInto(childText, child.text);
-      childLi.append(childText, makeIconBtn("▶️", "Resume", () => resumeTask(folder.id, child.id)));
+      childLi.append(childText, makeIconBtn("▶️", "Resume", () => resumeTask(child.id)));
       sub.append(childLi);
     }
     li.append(sub);
@@ -1090,7 +1359,7 @@ function attachDragReorder(li, task) {
         if (shouldDrop && dropFolderId) {
           addTaskToFolder(task.id, dropFolderId);
         } else if (shouldDrop && dropIndex !== null) {
-          moveTaskTo(task.id, dropIndex);
+          moveEntryTo(task, dropIndex);
         }
         suppressClickUntil = Date.now() + 300;
       } else if (manualScrolling) {
@@ -1232,7 +1501,7 @@ function toolbarActionButtons() {
 
 function updateToolbar() {
   const allowed = new Set(TOOLBAR_ACTIONS_BY_TAB[currentTab] || []);
-  const selectedTask = selected && state[selected.listName]?.find((t) => t.id === selected.id);
+  const selectedTask = selected && findEntry(selected.listName, selected.id);
   // Only "edit" (renaming the folder itself) applies to a folder selection —
   // everything else here is about its contents, via the per-child Resume
   // button.
@@ -1316,14 +1585,12 @@ function isValidBackupShape(obj) {
 }
 
 function applyBackup(obj) {
-  state = {
+  commit("replaceState", {
     tasks: obj.tasks,
     calendar: obj.calendar,
     completed: obj.completed,
     deleted: obj.deleted,
-  };
-  render();
-  saveState();
+  });
 }
 
 // A plain-text export/import round trip — handy as a general backup, and
@@ -1492,7 +1759,7 @@ function renderActionPopover() {
   }
   if (!pendingPopover || !selected) return;
   const { listName, id } = selected;
-  if (!state[listName]?.some((t) => t.id === id)) {
+  if (!findEntry(listName, id)) {
     pendingPopover = null;
     return;
   }
@@ -1526,7 +1793,7 @@ function renderActionPopover() {
       )
     );
   } else if (pendingPopover === "pause") {
-    const existingFolders = state.tasks.filter((t) => t.type === "folder");
+    const existingFolders = displayTasks().filter((t) => t.type === "folder");
     el.appHeader.append(
       buildPausePicker(
         existingFolders,
@@ -1552,7 +1819,7 @@ el.tbAccount.addEventListener("click", () => {
 el.tbComplete.addEventListener("click", () => {
   if (!selected) return;
   const { listName, id } = selected;
-  const task = state[listName]?.find((t) => t.id === id);
+  const task = findEntry(listName, id);
   if (!task) return;
   const recurrence = parseRecurrence(task.text);
   if (recurrence === "prompt") {
@@ -1603,7 +1870,7 @@ el.tbSendTasks.addEventListener("click", () => {
 el.tbEdit.addEventListener("click", () => {
   if (!selected) return;
   const { listName, id } = selected;
-  const task = state[listName]?.find((t) => t.id === id);
+  const task = findEntry(listName, id);
   if (!task) return;
   const row = document.querySelector(`.task-item[data-task-id="${id}"]`);
   if (task.type === "folder") {
@@ -1654,7 +1921,7 @@ function renderTasks() {
   list.innerHTML = "";
   updateEmptyMessage(el.tasksEmpty, state.tasks.length > 0, "No tasks. Tap ➕ above to add one.");
 
-  state.tasks.forEach((task) => {
+  displayTasks().forEach((task) => {
     if (task.type === "folder") {
       const li = buildFolderRow(task);
       list.append(li);
@@ -1798,19 +2065,14 @@ function renderSearchResults() {
   const results = [];
   for (const listName of scope) {
     for (const task of state[listName]) {
-      if (task.type === "folder") {
-        // Folders only live in Tasks; their contents count as part of the
-        // Tasks scope too, tagged with which blocker they're paused under.
-        for (const child of task.tasks) {
-          if (!query || child.text.toLowerCase().includes(query)) {
-            results.push({ listName, task: child, folder: task });
-          }
-        }
-        continue;
-      }
-      if (!query || task.text.toLowerCase().includes(query)) {
-        results.push({ listName, task });
-      }
+      if (query && !String(task.text || "").toLowerCase().includes(query)) continue;
+      // A paused task is tagged with the folder it's under, and jumping to
+      // it opens that folder (see jumpToTask).
+      const folder =
+        listName === "tasks" && folderKey(task.blocker)
+          ? { id: folderIdFor(task.blocker), blocker: String(task.blocker).trim() }
+          : null;
+      results.push({ listName, task, folder });
     }
   }
 
@@ -1919,13 +2181,19 @@ function attachUserDoc(uid) {
     unsubscribeSnapshot = null;
   }
   // Not loaded again until this (possibly new) doc actually produces a
-  // snapshot — see the dataLoaded comment on saveState for why that guard
+  // snapshot — see the dataLoaded comment on commit() for why that guard
   // matters, and renderTasks/etc. for the "Loading…" state this drives.
   // Also clear state itself, so switching accounts can't flash the
   // previous account's tasks alongside the "Loading…" message if something
   // triggers a render before the new doc's first snapshot arrives.
   dataLoaded = false;
   state = { tasks: [], calendar: [], completed: [], deleted: [] };
+  // Each account has its own queue of not-yet-committed changes (see the
+  // persistence comment), kept in localStorage so a change made offline
+  // survives a reload. Anything still queued for the previous account
+  // stays persisted under its own key and is picked back up on return.
+  queueStorageKey = `todoPendingOps:${uid}`;
+  pendingOps = loadQueue(queueStorageKey);
   render(); // shows "Loading…" immediately instead of leaving the previous account's list on screen
   docRef = fb.doc(db, "users", uid);
   unsubscribeSnapshot = fb.onSnapshot(
@@ -1933,32 +2201,27 @@ function attachUserDoc(uid) {
     { includeMetadataChanges: true },
     (snap) => {
       dataLoaded = true;
-      if (snap.exists()) {
-        const data = snap.data();
-        state = {
-          tasks: data.tasks || [],
-          calendar: data.calendar || [],
-          completed: data.completed || [],
-          deleted: data.deleted || [],
-        };
-      } else {
-        state = { tasks: [], calendar: [], completed: [], deleted: [] };
-      }
+      // The document as the server has it, with this tab's own not-yet-
+      // committed changes replayed on top — so an in-flight edit never
+      // flickers away and back, and a change made offline stays visible
+      // until it's actually been merged in.
+      state = withPendingOps(normalizeState(snap.exists() ? snap.data() : null));
       // fromCache means the SDK isn't currently reaching the server — a
       // reliable "you're offline" signal, unlike hasPendingWrites alone
       // (that's briefly true after any write even while fully online, just
       // from ordinary ack latency).
       if (snap.metadata.fromCache) {
         setSyncStatus(
-          snap.metadata.hasPendingWrites
+          pendingOps.length > 0 || snap.metadata.hasPendingWrites
             ? "Offline — changes saved locally, will sync once back online"
             : "Offline — showing last synced data"
         );
-      } else {
+      } else if (pendingOps.length === 0) {
         setSyncStatus(""); // connected and caught up
       }
       render();
       promoteDueTasksIfNeeded();
+      if (!snap.metadata.fromCache) flushOps(); // back in touch with the server — drain anything queued
     },
     (err) => {
       console.error(err);
@@ -1998,7 +2261,6 @@ async function connectFirebase(config) {
     }
 
     fb = {
-      setDoc: firestoreMod.setDoc,
       onSnapshot: firestoreMod.onSnapshot,
       runTransaction: firestoreMod.runTransaction,
       doc: firestoreMod.doc,
@@ -2023,6 +2285,9 @@ async function connectFirebase(config) {
   });
 
   setInterval(promoteDueTasksIfNeeded, 60 * 1000);
+  // The snapshot listener also flushes once the SDK reconnects, but the
+  // browser's own online event usually fires sooner.
+  window.addEventListener("online", () => flushOps());
 }
 
 // Upgrades the current guest (anonymous) session to a Google account, or

@@ -22,9 +22,10 @@ be nothing yet to merge it with once your real list shows up.
 
 ## Tabs
 
-- **Tasks** — your sorted list. New tasks go to the top. Drag a task
-  (click-drag on desktop, press-and-hold-then-drag on touch) to reorder;
-  a line shows where it'll land. Dragging near the top or bottom of the
+- **Tasks** — your list in priority order, most important first. New
+  tasks go to the top. Drag a task (click-drag on desktop,
+  press-and-hold-then-drag on touch) to reorder; a line shows where
+  it'll land. Dragging near the top or bottom of the
   screen scrolls the page, so you can drag a task to a spot that isn't
   currently on screen. A quick swipe on a task (too fast to count as a
   press-and-hold) just scrolls normally, and keeps gliding briefly after
@@ -88,15 +89,26 @@ between accounts if you ever needed to.
 Select a task in Tasks and tap ⏸️ to say what it's waiting on (e.g.
 "Home"). That creates a pale-red folder right there in the Tasks list —
 tap the folder (it turns a darker red) to open it and see what's
-paused inside, or ▶️ any task in it to send it back to the top of
-Tasks. Pausing a second task with the same blocker (typed again, or by
+paused inside, or ▶️ any task in it to send it back out to Tasks.
+Pausing a second task with the same blocker (typed again, or by
 tapping the folder's pill in the pause prompt instead of typing) adds
 it to that same folder rather than making a new one. A folder with
-nothing left in it disappears on its own. Folders drag-reorder within
-Tasks the same as a regular task, and you can also drag any task
+nothing left in it disappears on its own. You can also drag any task
 straight onto a folder to add it there without opening the pause
 prompt. Select a folder and tap ✏️ to rename it — renaming it to match
 another existing folder merges the two.
+
+**Where a folder sits is decided by what's in it.** Every task keeps its
+own place in the priority order whether it's paused or not — pausing
+doesn't move it, and neither does resuming (▶️ puts it back exactly
+where it ranked, not at the top). A folder is shown at the position of
+its highest-priority task, with its contents listed in priority order,
+and it moves on its own whenever that changes: resume the top task and
+the folder drops to where the next one ranks; put a higher-ranked task
+into it and the folder jumps up to meet it. So to re-rank something
+that's paused, resume it, drag it to where it belongs, and pause it
+again — the folder follows. Dragging the folder row itself moves
+everything in it together, as one block, to the spot you drop it.
 
 ### Search
 
@@ -166,14 +178,39 @@ anything) whenever it can't reach the server; it's blank once everything's
 caught up.
 
 What this **doesn't** cover: syncing while the app is fully closed. Nothing
-runs in the background, so if you make changes on your phone with no
-signal and then use the app on another device signed into the same
-account before reopening it on your phone, the two devices' offline
-changes can conflict — your list is saved as one document, so whichever
-device syncs second overwrites the other's changes rather than merging
-them. Reopening the app (even briefly, enough for it to reconnect) after
-you're back in range avoids this by syncing right away, before you'd have
-a chance to make conflicting changes elsewhere.
+runs in the background, so changes made on a phone with no signal only
+reach the server once the app is reopened there with a connection.
+
+## How changes are saved (and why several writers can share one list)
+
+Your whole list lives in one database document, and this app is not
+necessarily its only writer: a second device, a tab that was offline for
+a while, or a script that reorders your list overnight may all change it.
+So the app never saves "the whole list as this tab last saw it" — that
+would silently undo everything anyone else had done since. Instead each
+thing you do (add, complete, drag, pause, ...) is recorded as a small
+action, applied to your screen immediately, and then saved by reading the
+document as it is *right now*, replaying your queued actions on top of
+that, and writing the result — retried automatically if someone else's
+write lands in between. Two devices editing at once, or an offline
+session catching up later, therefore merge rather than overwrite: both
+sets of changes survive. (An action that no longer makes sense by the
+time it's saved — completing a task another device already completed,
+dropping a task next to one that's since gone — just does nothing.)
+
+Queued actions are kept on-device until they've been saved, so an
+offline edit survives closing the app. While some are still waiting the
+header says so; a save that fails while apparently online shows "Save
+failed — retrying…" and keeps trying.
+
+For anything else that writes the document: `tasks` is one flat array in
+priority order (first = most important). A paused task stays in that
+array at its own position and carries `blocker: "<folder name>"`;
+folders are not stored, they're derived from that field when drawn. The
+app still reads the old shape (inline `{ type: "folder", tasks: [...] }`
+entries) and converts it the first time it saves. Each save also bumps
+`rev` and sets `updatedAt`; nothing in the app reads them, they're for
+other tools' bookkeeping.
 
 ## One-time setup
 
