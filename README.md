@@ -212,6 +212,33 @@ entries) and converts it the first time it saves. Each save also bumps
 `rev` and sets `updatedAt`; nothing in the app reads them, they're for
 other tools' bookkeeping.
 
+### The change log
+
+So that another tool can learn what you did without reading the whole
+list and comparing it with what it remembers, every action you take here
+also leaves one small entry in the document's `changes` array, written by
+the same save as the change itself:
+
+```
+{ seq, at, type, id?, list?, text?, label?, folder?, date?, value?, n? }
+```
+
+- `seq` counts up by one per entry, and `changeSeq` holds the latest. A
+  reader keeps the last `seq` it has seen and takes the entries after it,
+  so nothing depends on two devices' clocks agreeing. `at` is when the
+  save happened.
+- `type` is the action (`addTask`, `editTaskText`, `completeTask`,
+  `deleteTask`, `moveTask`, `moveToCalendar`, `pauseTask`, ...).
+- `text` is the full new text of an added or edited task. For every
+  other action `label` is the first line of the task it was about.
+- An action that ends up doing nothing (the task had already gone, the
+  text was already that) leaves no entry.
+
+Only what is done in this app is logged; a tool that writes the document
+directly is expected to know what it did. The log keeps the most recent
+200 entries and is also capped by size, because it shares the document
+with the list. Nothing in the app reads it.
+
 ## One-time setup
 
 The app itself is just static files (`index.html`, `app.js`, `style.css`)
