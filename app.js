@@ -8,7 +8,7 @@ const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/fireb
 const FIREBASE_AUTH_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "26";
+const APP_VERSION = "27";
 
 /* ---------- config resolution ---------- */
 
@@ -512,6 +512,95 @@ function applyOp(st, op) {
   if (fn) fn(st, op.args || {});
 }
 
+/* ---------- change log: what was done here, for other tools to read ---------- */
+
+// Other tools work on this list too (a script reprioritises it overnight
+// and answers questions left in it). Without a log, the only way for one
+// of them to learn what you changed is to read the whole document and
+// compare it with what it remembers. So every action that goes through
+// commit() also leaves one small entry in the document's `changes` array,
+// written by the same transaction as the change itself:
+//
+//   { seq, at, type, id?, list?, text?, label?, folder?, date?, value?, n? }
+//
+// `seq` counts up by one per entry (`changeSeq` holds the latest), so a
+// reader keeps the last seq it saw and asks for the entries after it —
+// no comparing clocks between devices. `text` is the full new text of an
+// added or edited task; `label` is the first line of the task any other
+// action was about. Nothing in this app reads the log back.
+//
+// The log is bounded twice over, by entry count and by total size, because
+// it lives in the same document as the list and a document that grows past
+// Firestore's 1 MB limit can no longer be saved at all.
+const CHANGE_LOG_MAX_ENTRIES = 200;
+const CHANGE_LOG_MAX_CHARS = 100 * 1000;
+const CHANGE_TEXT_MAX_CHARS = 2000;
+
+function clipChangeText(text) {
+  const s = String(text ?? "");
+  return s.length > CHANGE_TEXT_MAX_CHARS ? `${s.slice(0, CHANGE_TEXT_MAX_CHARS)}…` : s;
+}
+
+function findTaskAnywhere(st, id) {
+  for (const listName of ["tasks", "calendar", "completed", "deleted"]) {
+    const task = st[listName]?.find((t) => t.id === id);
+    if (task) return task;
+  }
+  return null;
+}
+
+// Describes `op` against `st` as it is BEFORE the op is applied (so the
+// task an op removes can still be named). Returns null for an op that will
+// do nothing — the task has gone, the text is already what it's being set
+// to, nothing is due — so a replayed queue doesn't fill the log with
+// entries for changes that never happened.
+function describeChange(st, op) {
+  const type = op?.type;
+  if (!OPS[type]) return null;
+  const a = op.args || {};
+  const entry = { type };
+  if (type === "addTask") {
+    if (st.tasks.some((t) => t.id === a.id)) return null;
+    entry.id = a.id;
+    entry.text = clipChangeText(a.text);
+    return entry;
+  }
+  if (type === "replaceState") return entry;
+  if (type === "promoteDue") {
+    const n = st.calendar.filter((t) => t.targetDate <= a.today).length;
+    if (n === 0) return null;
+    entry.n = n;
+    return entry;
+  }
+  if (type === "renameFolder") {
+    if (!st.tasks.some((t) => folderKey(t.blocker) === a.key)) return null;
+    entry.folder = String(a.blocker ?? "").trim();
+    return entry;
+  }
+  // Everything else acts on one task, named by id.
+  const task = a.id ? findTaskAnywhere(st, a.id) : null;
+  if (!task) return null;
+  entry.id = a.id;
+  if (a.listName) entry.list = a.listName;
+  if (type === "editTaskText") {
+    if (task.text === a.text) return null;
+    entry.text = clipChangeText(a.text);
+    return entry;
+  }
+  entry.label = clipChangeText(String(task.text ?? "").split("\n")[0]).slice(0, 120);
+  if (a.blocker != null) entry.folder = String(a.blocker).trim();
+  if (a.targetDate != null) entry.date = a.targetDate;
+  if (a.nextDate) entry.date = a.nextDate; // a recurring task's next copy, sent to Calendar
+  if (type === "setInProgress") entry.value = !!a.value;
+  return entry;
+}
+
+function trimChangeLog(changes) {
+  let log = changes.slice(-CHANGE_LOG_MAX_ENTRIES);
+  while (log.length > 1 && JSON.stringify(log).length > CHANGE_LOG_MAX_CHARS) log = log.slice(1);
+  return log;
+}
+
 function withPendingOps(base) {
   if (pendingOps.length === 0) return base;
   const st = JSON.parse(JSON.stringify(base));
@@ -577,15 +666,27 @@ async function flushOps() {
       const snap = await tx.get(ref);
       const data = snap.exists() ? snap.data() : {};
       const st = normalizeState(data);
-      for (const op of batch) applyOp(st, op);
+      // The change log (see describeChange): one small entry per action
+      // that actually did something, numbered so a reader can ask for
+      // "everything after the last one I saw".
+      const changes = Array.isArray(data.changes) ? data.changes.slice() : [];
+      let changeSeq = Number(data.changeSeq) || 0;
+      const at = new Date().toISOString();
+      for (const op of batch) {
+        const entry = describeChange(st, op);
+        applyOp(st, op);
+        if (entry) changes.push({ seq: ++changeSeq, at, ...entry });
+      }
       // Spread `data` first so fields this app doesn't know about (left by
       // other tools) survive the write. rev/updatedAt are bookkeeping for
       // those tools, nothing here reads them.
       tx.set(ref, {
         ...data,
         ...st,
+        changes: trimChangeLog(changes),
+        changeSeq,
         rev: (Number(data.rev) || 0) + 1,
-        updatedAt: new Date().toISOString(),
+        updatedAt: at,
       });
     });
     queue.splice(0, batch.length); // ops added while in flight stay queued
