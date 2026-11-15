@@ -258,13 +258,39 @@ textarea {
   background: var(--selected-bg);
 }
 
-.task-item.in-progress {
-  background: var(--inprogress-bg);
-  border-color: var(--inprogress-border);
+/* Highlight colours. Each sets four values; a selected row shows a deeper
+   shade of its own colour rather than the plain selection blue. Blue leans
+   toward sky so it does not read as "selected", and pink toward magenta so
+   it does not read as a folder. */
+.task-item.color-green, .color-swatch.color-green, .icon-btn[data-color="green"] {
+  --c-bg: var(--inprogress-bg); --c-border: var(--inprogress-border);
+  --c-bg-selected: var(--inprogress-bg-selected); --c-border-selected: var(--inprogress-border-selected);
 }
-.task-item.in-progress.selected {
-  background: var(--inprogress-bg-selected);
-  border-color: var(--inprogress-border-selected);
+.task-item.color-pink, .color-swatch.color-pink, .icon-btn[data-color="pink"] {
+  --c-bg: #fce3f1; --c-border: #eba9d0; --c-bg-selected: #f8c6e2; --c-border-selected: #cf72ac;
+}
+.task-item.color-orange, .color-swatch.color-orange, .icon-btn[data-color="orange"] {
+  --c-bg: #ffe9d4; --c-border: #f2bd8a; --c-bg-selected: #ffd4ab; --c-border-selected: #d98f48;
+}
+.task-item.color-yellow, .color-swatch.color-yellow, .icon-btn[data-color="yellow"] {
+  --c-bg: #fff8c7; --c-border: #e6d578; --c-bg-selected: #ffef94; --c-border-selected: #c4af38;
+}
+.task-item.color-blue, .color-swatch.color-blue, .icon-btn[data-color="blue"] {
+  --c-bg: #dcf3fa; --c-border: #9ad3e6; --c-bg-selected: #bce7f5; --c-border-selected: #48a3c2;
+}
+.task-item.color-purple, .color-swatch.color-purple, .icon-btn[data-color="purple"] {
+  --c-bg: #ece4fb; --c-border: #c2adea; --c-bg-selected: #dbccf7; --c-border-selected: #9172d2;
+}
+.color-swatch.color-none {
+  --c-bg: var(--panel-bg); --c-border: var(--border); --c-border-selected: var(--muted);
+}
+.task-item.colored {
+  background: var(--c-bg);
+  border-color: var(--c-border);
+}
+.task-item.colored.selected {
+  background: var(--c-bg-selected);
+  border-color: var(--c-border-selected);
 }
 
 .task-item.folder {
@@ -410,6 +436,14 @@ textarea {
      swipes that turn out not to be a drag (see attachDragReorder). */
   touch-action: none;
 }
+/* While a row is being edited the gesture goes back to the browser, so a
+   finger anywhere on it (the text box included) scrolls the page. Without
+   this, an editor taller than the screen could not be scrolled at all and
+   its Save button could not be reached. */
+#tasks-list .task-item.editing {
+  cursor: auto;
+  touch-action: pan-y;
+}
 #tasks-list .task-item.dragging {
   cursor: grabbing;
   background: #fff6c9; /* pale yellow */
@@ -463,6 +497,40 @@ textarea {
 .date-picker-cancel {
   background: var(--danger-bg);
   color: var(--danger);
+}
+
+.color-picker {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 5;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+  width: max-content;
+  max-width: calc(100vw - 16px);
+}
+.color-swatch {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 2px solid var(--c-border);
+  background: var(--c-bg);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+}
+.color-swatch.current {
+  border-color: var(--c-border-selected);
+  box-shadow: 0 0 0 2px var(--panel-bg), 0 0 0 4px var(--c-border-selected);
+}
+.icon-btn[data-color]:not([data-color=""]) {
+  background: var(--c-bg);
 }
 
 .pause-picker {

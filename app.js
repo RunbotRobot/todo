@@ -8,7 +8,7 @@ const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/fireb
 const FIREBASE_AUTH_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 
 const INDENT = "    "; // 4 spaces per indent level
-const APP_VERSION = "27";
+const APP_VERSION = "28";
 
 /* ---------- config resolution ---------- */
 
@@ -45,7 +45,7 @@ let unsubscribeSnapshot = null; // detaches the previous doc's listener when the
 let dataLoaded = false; // true once the current user's doc has produced its first snapshot
 let editingKey = null; // "listName:id" while a task is being edited inline
 let selected = null; // { listName, id } — the task the toolbar buttons act on
-let pendingPopover = null; // "send-calendar" | "complete-recurring" | "pause" | null
+let pendingPopover = null; // "send-calendar" | "complete-recurring" | "pause" | "color" | "account" | null
 let currentTab = "tasks";
 let suppressClickUntil = 0; // guards the ghost "click" that follows a real drag
 
@@ -375,15 +375,47 @@ function canonicalBlocker(st, blocker) {
   return existing ? String(existing.blocker).trim() : String(blocker).trim();
 }
 
+// The highlight colours a task can have, in the order the picker shows
+// them. "" is white, i.e. no colour.
+const TASK_COLORS = ["", "green", "pink", "orange", "yellow", "blue", "purple"];
+const TASK_COLOR_NAMES = { "": "White", green: "Green", pink: "Pink", orange: "Orange", yellow: "Yellow", blue: "Blue", purple: "Purple" };
+
+function taskColor(task) {
+  if (!task) return "";
+  if (task.color && TASK_COLORS.includes(task.color)) return task.color;
+  return task.inProgress ? "green" : "";
+}
+
+function applyTaskColor(li, task) {
+  const color = taskColor(task);
+  if (color) li.classList.add("colored", `color-${color}`);
+}
+
 const OPS = {
   addTask(st, { id, text, createdAt }) {
     if (st.tasks.some((t) => t.id === id)) return;
     st.tasks.unshift({ id, text, createdAt });
   },
 
+  // Kept for actions queued by a version of the app from before colours
+  // existed: its green on/off still means green or white.
   setInProgress(st, { id, value }) {
     const task = st.tasks.find((t) => t.id === id);
-    if (task) task.inProgress = !!value;
+    if (!task) return;
+    task.inProgress = !!value;
+    delete task.color;
+  },
+
+  // color is one of TASK_COLORS; "" is white. Green is stored the way it
+  // always was (inProgress: true), so tasks that were green before colours
+  // existed stay green and an older copy of the app still shows them.
+  setColor(st, { id, color }) {
+    const task = st.tasks.find((t) => t.id === id);
+    if (!task || !TASK_COLORS.includes(color)) return;
+    delete task.color;
+    delete task.inProgress;
+    if (color === "green") task.inProgress = true;
+    else if (color) task.color = color;
   },
 
   // nextDate/nextId, when given, also spin off a fresh copy of the task
@@ -393,10 +425,10 @@ const OPS = {
   completeTask(st, { listName, id, at, nextId, nextDate }) {
     const task = takeFrom(st, listName, id);
     if (!task) return;
-    // inProgress and blocker only mean something inside the Tasks list —
+    // A colour (inProgress is green) and blocker only mean something inside the Tasks list —
     // strip them so a resurrected task doesn't silently come back flagged
     // or paused from whenever it left, without you having decided that.
-    const { targetDate, sentAt, inProgress, blocker, ...rest } = task;
+    const { targetDate, sentAt, inProgress, color, blocker, ...rest } = task;
     st.completed.unshift({ ...rest, completedAt: at });
     if (nextDate && nextId && !st.calendar.some((t) => t.id === nextId)) {
       st.calendar.push({ id: nextId, text: task.text, createdAt: at, targetDate: nextDate, sentAt: at });
@@ -406,7 +438,7 @@ const OPS = {
   deleteTask(st, { listName, id, at }) {
     const task = takeFrom(st, listName, id);
     if (!task) return;
-    const { inProgress, blocker, ...rest } = task; // see completeTask
+    const { inProgress, color, blocker, ...rest } = task; // see completeTask
     st.deleted.unshift({ ...rest, deletedAt: at, sourceList: listName });
   },
 
@@ -417,7 +449,7 @@ const OPS = {
   moveToCalendar(st, { id, targetDate, at }) {
     const task = takeFrom(st, "tasks", id);
     if (!task) return;
-    const { inProgress, blocker, ...rest } = task; // see completeTask
+    const { inProgress, color, blocker, ...rest } = task; // see completeTask
     st.calendar.push({ ...rest, targetDate, sentAt: at });
   },
 
@@ -451,12 +483,13 @@ const OPS = {
 
   // The task keeps its priority slot; only its folder membership changes.
   // A paused (blocked) task isn't work you're actively doing, so the
-  // in-progress flag comes off on the way in.
+  // colour comes off on the way in.
   pauseTask(st, { id, blocker }) {
     const task = st.tasks.find((t) => t.id === id);
     if (!task || !folderKey(blocker)) return;
     task.blocker = canonicalBlocker(st, blocker);
     delete task.inProgress;
+    delete task.color;
   },
 
   // Back out of its folder, keeping its priority slot — so it reappears
@@ -592,6 +625,10 @@ function describeChange(st, op) {
   if (a.targetDate != null) entry.date = a.targetDate;
   if (a.nextDate) entry.date = a.nextDate; // a recurring task's next copy, sent to Calendar
   if (type === "setInProgress") entry.value = !!a.value;
+  if (type === "setColor") {
+    if (!TASK_COLORS.includes(a.color) || taskColor(task) === a.color) return null;
+    entry.value = a.color || "white";
+  }
   return entry;
 }
 
@@ -736,13 +773,16 @@ function addTask(text) {
   commit("addTask", { id: uuid(), text, createdAt: new Date().toISOString() });
 }
 
-// A lightweight status flag for the Tasks list only — just marks which of
-// several things you're actively juggling right now, distinct from Pause's
-// "blocked on something" meaning. Stripped whenever a task leaves Tasks.
-function toggleInProgress(id) {
+// A highlight colour for the Tasks list only — yours to give whatever
+// meaning you like (green began as "in progress"). Distinct from Pause's
+// "blocked on something". Stripped whenever a task leaves Tasks. Returns
+// whether anything changed.
+function setTaskColor(id, color) {
   const task = findEntry("tasks", id);
-  if (!task || task.type === "folder") return;
-  commit("setInProgress", { id, value: !task.inProgress });
+  if (!task || task.type === "folder") return false;
+  if (!TASK_COLORS.includes(color) || taskColor(task) === color) return false;
+  commit("setColor", { id, color });
+  return true;
 }
 
 // nextDate (YYYY-MM-DD), when given, also spins off a fresh copy of the
@@ -1015,7 +1055,7 @@ function buildTaskRow(listName, task, metaText) {
   li.className = "task-item selectable";
   li.dataset.taskId = task.id;
   if (isSelected(listName, task.id)) li.classList.add("selected");
-  if (task.inProgress) li.classList.add("in-progress");
+  applyTaskColor(li, task);
 
   const textWrap = document.createElement("div");
   textWrap.className = "task-text";
@@ -1303,6 +1343,9 @@ function attachDragReorder(li, task) {
   const canDrag = task.type !== "folder";
   li.addEventListener("pointerdown", (e) => {
     if (e.target.closest("button, input, textarea")) return;
+    // A row being edited is never dragged, and scrolls natively (its CSS
+    // gives the gesture back to the browser), so there is nothing to do here.
+    if (li.classList.contains("editing")) return;
     if (e.pointerType === "mouse" && e.button !== 0) return;
     stopMomentumScroll(); // a new touch always takes over from a fling in progress
 
@@ -1495,6 +1538,10 @@ function attachDragReorder(li, task) {
 function startEdit(listName, task, textNode) {
   editingKey = `${listName}:${task.id}`;
   const container = textNode.parentElement;
+  // Marks the row so the page scrolls natively under a finger anywhere on
+  // it (see the .editing rule in the CSS and attachDragReorder): the
+  // editor can be taller than the screen, and Save sits at its bottom.
+  container.closest(".task-item")?.classList.add("editing");
   const editWrap = document.createElement("div");
   editWrap.className = "task-edit-area";
 
@@ -1607,9 +1654,9 @@ function updateToolbar() {
     btn.classList.toggle("hidden", !isRelevant);
     btn.disabled = !isRelevant || !selected || (selectedIsFolder && action !== "edit");
   }
-  // Reflects the selected task's own state, the way Highlight's button does
+  // Reflects the selected task's own colour, the way Highlight's button does
   // during editing — not just whether the action is available right now.
-  el.tbInProgress.classList.toggle("active", !!selectedTask && !!selectedTask.inProgress);
+  el.tbInProgress.dataset.color = selectedIsFolder ? "" : taskColor(selectedTask);
   const deleteLabel = currentTab === "deleted" ? "Delete Permanently" : "Delete";
   el.tbDelete.title = deleteLabel;
   el.tbDelete.setAttribute("aria-label", deleteLabel);
@@ -1780,6 +1827,29 @@ function buildBackupSection() {
   return wrap;
 }
 
+// One round swatch per colour; the task's current one is ringed. There is
+// no cancel button: choosing closes it, and so does tapping the palette
+// button again.
+function buildColorPicker(current, onPick) {
+  const wrap = document.createElement("div");
+  wrap.className = "color-picker";
+  wrap.setAttribute("role", "group");
+  wrap.setAttribute("aria-label", "Color");
+  for (const color of TASK_COLORS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `color-swatch color-${color || "none"}`;
+    if (color === current) btn.classList.add("current");
+    btn.dataset.color = color;
+    btn.title = TASK_COLOR_NAMES[color];
+    btn.setAttribute("aria-label", TASK_COLOR_NAMES[color]);
+    btn.setAttribute("aria-pressed", String(color === current));
+    btn.addEventListener("click", () => onPick(color));
+    wrap.append(btn);
+  }
+  return wrap;
+}
+
 function buildAccountPopover() {
   const wrap = document.createElement("div");
   wrap.className = "account-popover";
@@ -1845,7 +1915,7 @@ function buildAccountPopover() {
 }
 
 function renderActionPopover() {
-  el.appHeader.querySelector(".date-picker, .pause-picker, .account-popover")?.remove();
+  el.appHeader.querySelector(".date-picker, .pause-picker, .color-picker, .account-popover")?.remove();
   // Unlike the others below, the account popover isn't about a selected
   // task — it's always available regardless of what (if anything) is
   // selected.
@@ -1904,6 +1974,15 @@ function renderActionPopover() {
         }
       )
     );
+  } else if (pendingPopover === "color") {
+    el.appHeader.append(
+      buildColorPicker(taskColor(findEntry(listName, id)), (color) => {
+        // Choosing closes the picker and leaves the task selected; if the
+        // colour didn't change nothing was committed, so repaint here.
+        pendingPopover = null;
+        if (!setTaskColor(id, color)) render();
+      })
+    );
   }
 }
 
@@ -1953,7 +2032,8 @@ el.tbPause.addEventListener("click", () => {
 
 el.tbInProgress.addEventListener("click", () => {
   if (!selected) return;
-  toggleInProgress(selected.id);
+  pendingPopover = pendingPopover === "color" ? null : "color";
+  render();
 });
 
 el.tbSendTasks.addEventListener("click", () => {
@@ -2177,7 +2257,7 @@ function renderSearchResults() {
   for (const { listName, task, folder } of results) {
     const li = document.createElement("li");
     li.className = "task-item selectable";
-    if (task.inProgress) li.classList.add("in-progress");
+    applyTaskColor(li, task);
     const textWrap = document.createElement("div");
     textWrap.className = "task-text";
     renderTaskTextInto(textWrap, task.text);
